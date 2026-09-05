@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "377426614418",
+    "project_id": "rr-motor",
+    "storage_bucket": "rr-motor.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:377426614418:android:9f1bd17d872023b5602e4b",
+        "android_client_info": {
+          "package_name": "com.rrmotor.nota"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBaadGLxeUE9tfKkzd11U-s5YYMvHWs4Ww"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:377426614418:android:a710757a3a4006c5602e4b",
+        "android_client_info": {
+          "package_name": "com.rrmotor.reminder"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBaadGLxeUE9tfKkzd11U-s5YYMvHWs4Ww"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
