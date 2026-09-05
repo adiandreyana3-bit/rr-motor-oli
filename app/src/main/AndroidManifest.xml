@@ -1,36 +1,39 @@
-<?xml version="1.0" encoding="utf-8"?><manifest xmlns:android="http://schemas.android.com/apk/res/android"><!-- Untuk Firebase dan membuka WhatsApp -->
-<uses-permission android:name="android.permission.INTERNET" />
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-<!-- Notifikasi Android 13+ -->
-<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
-<!-- Membaca kontak untuk tombol KONTAK -->
-<uses-permission android:name="android.permission.READ_CONTACTS" />
+    <application
+        android:allowBackup="false"
+        android:label="RR MOTOR REMINDER"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.RRMotorReminder">
 
-<!-- Menjadwalkan reminder -->
-<uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+        <!-- Halaman Login -->
+        <activity
+            android:name=".LoginActivity"
+            android:exported="true">
 
-<application
-    android:allowBackup="false"
-    android:label="RR MOTOR REMINDER"
-    android:supportsRtl="true"
-    android:theme="@style/Theme.RRMotorReminder">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
 
-    <activity
-        android:name=".MainActivity"
-        android:exported="true">
+        </activity>
 
-        <intent-filter>
-            <action android:name="android.intent.action.MAIN" />
-            <category android:name="android.intent.category.LAUNCHER" />
-        </intent-filter>
+        <!-- Halaman utama -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="false" />
 
-    </activity>
+        <!-- Penerima alarm reminder -->
+        <receiver
+            android:name=".ReminderReceiver"
+            android:exported="false" />
 
-    <receiver
-        android:name=".ReminderReceiver"
-        android:exported="false" />
-
-</application>
+    </application>
 
 </manifest>
