@@ -8,11 +8,12 @@
 
     <application
         android:allowBackup="false"
+        android:icon="@drawable/rr_motor_reminder_icon"
+        android:roundIcon="@drawable/rr_motor_reminder_icon"
         android:label="RR MOTOR REMINDER"
         android:supportsRtl="true"
         android:theme="@style/Theme.RRMotorReminder">
 
-        <!-- Halaman Login -->
         <activity
             android:name=".LoginActivity"
             android:exported="true">
@@ -24,12 +25,10 @@
 
         </activity>
 
-        <!-- Halaman utama -->
         <activity
             android:name=".MainActivity"
             android:exported="false" />
 
-        <!-- Penerima alarm reminder -->
         <receiver
             android:name=".ReminderReceiver"
             android:exported="false" />
