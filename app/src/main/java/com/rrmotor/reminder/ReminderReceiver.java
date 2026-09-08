@@ -1,5 +1,6 @@
 package com.rrmotor.reminder;
 
+import android.app.AlarmManager;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -10,10 +11,8 @@ import android.os.Build;
 
 import androidx.core.app.NotificationCompat;
 
-import com.google.firebase.Timestamp;
 import com.google.firebase.firestore.FirebaseFirestore;
 
-import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -54,10 +53,20 @@ public class ReminderReceiver extends BroadcastReceiver {
         }
 
         /*
-         * Tandai reminder sebagai sudah terkirim
-         * dan tentukan waktu penghapusan otomatis.
+         * Tandai reminder sebagai terkirim.
          */
-        tandaiReminderTerkirim(documentId);
+        tandaiReminderTerkirim(
+                documentId
+        );
+
+        /*
+         * Jadwalkan penghapusan otomatis
+         * 2 hari / 48 jam dari sekarang.
+         */
+        jadwalkanPenghapusan(
+                context,
+                documentId
+        );
 
         /*
          * Buat channel notifikasi.
@@ -65,7 +74,7 @@ public class ReminderReceiver extends BroadcastReceiver {
         buatChannel(context);
 
         /*
-         * Intent untuk membuka MainActivity.
+         * Intent ketika notifikasi ditekan.
          */
         Intent bukaIntent =
                 new Intent(
@@ -186,9 +195,6 @@ public class ReminderReceiver extends BroadcastReceiver {
             return;
         }
 
-        /*
-         * Waktu reminder dianggap terkirim.
-         */
         long waktuTerkirim =
                 System.currentTimeMillis();
 
@@ -202,56 +208,29 @@ public class ReminderReceiver extends BroadcastReceiver {
                         * 60L
                         * 1000L;
 
-        /*
-         * Waktu penghapusan = waktu terkirim + 2 hari.
-         */
         long deleteAt =
                 waktuTerkirim + duaHari;
 
         Map<String, Object> update =
                 new HashMap<>();
 
-        /*
-         * Status reminder.
-         */
         update.put(
                 "reminderTerkirim",
                 true
         );
 
-        /*
-         * Tetap simpan waktu lama
-         * agar tidak merusak data/kode sebelumnya.
-         */
         update.put(
                 "waktuTerkirim",
                 waktuTerkirim
         );
 
         /*
-         * Field lama tetap disimpan.
+         * Tetap simpan field deleteAt
+         * untuk pemeriksaan keamanan.
          */
         update.put(
                 "deleteAt",
                 deleteAt
-        );
-
-        /*
-         * FIELD KHUSUS FIRESTORE TTL.
-         *
-         * Tipe datanya Timestamp, bukan long.
-         *
-         * Firestore TTL nantinya akan menggunakan
-         * field deleteAtTimestamp ini.
-         */
-        Timestamp waktuHapusTTL =
-                new Timestamp(
-                        new Date(deleteAt)
-                );
-
-        update.put(
-                "deleteAtTimestamp",
-                waktuHapusTTL
         );
 
         FirebaseFirestore.getInstance()
@@ -261,9 +240,116 @@ public class ReminderReceiver extends BroadcastReceiver {
                 .addOnFailureListener(
                         e -> {
                             // Notifikasi tetap berjalan
-                            // walaupun update Firestore gagal.
                         }
                 );
+    }
+
+    private void jadwalkanPenghapusan(
+            Context context,
+            String documentId
+    ) {
+
+        if (documentId == null ||
+                documentId.trim().isEmpty()) {
+
+            return;
+        }
+
+        /*
+         * 48 jam dari sekarang.
+         */
+        long waktuHapus =
+                System.currentTimeMillis()
+                        + (
+                        2L
+                                * 24L
+                                * 60L
+                                * 60L
+                                * 1000L
+                );
+
+        Intent deleteIntent =
+                new Intent(
+                        context,
+                        DeleteReminderReceiver.class
+                );
+
+        deleteIntent.putExtra(
+                "documentId",
+                documentId
+        );
+
+        int requestCode =
+                Math.abs(
+                        documentId.hashCode()
+                );
+
+        if (requestCode == 0) {
+            requestCode = 1;
+        }
+
+        PendingIntent deletePendingIntent =
+                PendingIntent.getBroadcast(
+                        context,
+                        requestCode,
+                        deleteIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT |
+                                PendingIntent.FLAG_IMMUTABLE
+                );
+
+        AlarmManager alarmManager =
+                (AlarmManager)
+                        context.getSystemService(
+                                Context.ALARM_SERVICE
+                        );
+
+        if (alarmManager == null) {
+            return;
+        }
+
+        /*
+         * Android 12+ memerlukan izin
+         * exact alarm untuk alarm tepat waktu.
+         */
+        if (Build.VERSION.SDK_INT >=
+                Build.VERSION_CODES.S) {
+
+            if (!alarmManager.canScheduleExactAlarms()) {
+
+                /*
+                 * Kalau exact alarm belum tersedia,
+                 * gunakan alarm biasa sebagai fallback.
+                 */
+                alarmManager.set(
+                        AlarmManager.RTC_WAKEUP,
+                        waktuHapus,
+                        deletePendingIntent
+                );
+
+                return;
+            }
+        }
+
+        /*
+         * Jadwalkan alarm 48 jam kemudian.
+         */
+        if (Build.VERSION.SDK_INT >=
+                Build.VERSION_CODES.M) {
+
+            alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    waktuHapus,
+                    deletePendingIntent
+            );
+
+        } else {
+
+            alarmManager.setExact(
+                    AlarmManager.RTC_WAKEUP,
+                    waktuHapus,
+                    deletePendingIntent
+            );
+        }
     }
 
     private void buatChannel(
