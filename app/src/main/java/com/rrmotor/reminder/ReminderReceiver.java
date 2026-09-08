@@ -10,8 +10,10 @@ import android.os.Build;
 
 import androidx.core.app.NotificationCompat;
 
+import com.google.firebase.Timestamp;
 import com.google.firebase.firestore.FirebaseFirestore;
 
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -51,25 +53,20 @@ public class ReminderReceiver extends BroadcastReceiver {
                     "Waktunya melakukan pengecekan atau pergantian oli motor di RR MOTOR.";
         }
 
-        // =====================================================
-        // TANDAI REMINDER SEBAGAI TERKIRIM
-        // =====================================================
+        /*
+         * Tandai reminder sebagai sudah terkirim
+         * dan tentukan waktu penghapusan otomatis.
+         */
+        tandaiReminderTerkirim(documentId);
 
-        tandaiReminderTerkirim(
-                documentId
-        );
-
-        // =====================================================
-        // BUAT CHANNEL NOTIFIKASI
-        // =====================================================
-
+        /*
+         * Buat channel notifikasi.
+         */
         buatChannel(context);
 
-        // =====================================================
-        // KETIKA NOTIFIKASI DITEKAN
-        // BUKA MAIN ACTIVITY DAN LANJUT KE WHATSAPP
-        // =====================================================
-
+        /*
+         * Intent untuk membuka MainActivity.
+         */
         Intent bukaIntent =
                 new Intent(
                         context,
@@ -102,10 +99,31 @@ public class ReminderReceiver extends BroadcastReceiver {
                         Intent.FLAG_ACTIVITY_SINGLE_TOP
         );
 
-        int requestCode =
-                documentId != null
-                        ? Math.abs(documentId.hashCode())
-                        : (int) System.currentTimeMillis();
+        int requestCode;
+
+        if (documentId != null &&
+                !documentId.trim().isEmpty()) {
+
+            requestCode =
+                    Math.abs(
+                            documentId.hashCode()
+                    );
+
+            if (requestCode == 0) {
+                requestCode = 1;
+            }
+
+        } else {
+
+            requestCode =
+                    (int)
+                            (System.currentTimeMillis()
+                                    & 0x7fffffff);
+
+            if (requestCode == 0) {
+                requestCode = 1;
+            }
+        }
 
         PendingIntent pendingIntent =
                 PendingIntent.getActivity(
@@ -115,10 +133,6 @@ public class ReminderReceiver extends BroadcastReceiver {
                         PendingIntent.FLAG_UPDATE_CURRENT |
                                 PendingIntent.FLAG_IMMUTABLE
                 );
-
-        // =====================================================
-        // NOTIFIKASI
-        // =====================================================
 
         NotificationCompat.Builder builder =
                 new NotificationCompat.Builder(
@@ -162,12 +176,6 @@ public class ReminderReceiver extends BroadcastReceiver {
         }
     }
 
-    // =====================================================
-    // UPDATE FIRESTORE
-    // REMINDER TERKIRIM
-    // HAPUS OTOMATIS 2 HARI KEMUDIAN
-    // =====================================================
-
     private void tandaiReminderTerkirim(
             String documentId
     ) {
@@ -178,9 +186,15 @@ public class ReminderReceiver extends BroadcastReceiver {
             return;
         }
 
+        /*
+         * Waktu reminder dianggap terkirim.
+         */
         long waktuTerkirim =
                 System.currentTimeMillis();
 
+        /*
+         * 2 hari = 48 jam.
+         */
         long duaHari =
                 2L
                         * 24L
@@ -188,36 +202,69 @@ public class ReminderReceiver extends BroadcastReceiver {
                         * 60L
                         * 1000L;
 
+        /*
+         * Waktu penghapusan = waktu terkirim + 2 hari.
+         */
         long deleteAt =
                 waktuTerkirim + duaHari;
 
         Map<String, Object> update =
                 new HashMap<>();
 
+        /*
+         * Status reminder.
+         */
         update.put(
                 "reminderTerkirim",
                 true
         );
 
+        /*
+         * Tetap simpan waktu lama
+         * agar tidak merusak data/kode sebelumnya.
+         */
         update.put(
                 "waktuTerkirim",
                 waktuTerkirim
         );
 
+        /*
+         * Field lama tetap disimpan.
+         */
         update.put(
                 "deleteAt",
                 deleteAt
         );
 
+        /*
+         * FIELD KHUSUS FIRESTORE TTL.
+         *
+         * Tipe datanya Timestamp, bukan long.
+         *
+         * Firestore TTL nantinya akan menggunakan
+         * field deleteAtTimestamp ini.
+         */
+        Timestamp waktuHapusTTL =
+                new Timestamp(
+                        new Date(deleteAt)
+                );
+
+        update.put(
+                "deleteAtTimestamp",
+                waktuHapusTTL
+        );
+
         FirebaseFirestore.getInstance()
                 .collection("reminders")
                 .document(documentId)
-                .update(update);
+                .update(update)
+                .addOnFailureListener(
+                        e -> {
+                            // Notifikasi tetap berjalan
+                            // walaupun update Firestore gagal.
+                        }
+                );
     }
-
-    // =====================================================
-    // CHANNEL NOTIFIKASI
-    // =====================================================
 
     private void buatChannel(
             Context context
