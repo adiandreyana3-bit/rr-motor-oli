@@ -1,9 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Internet untuk Firebase / Firestore -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Notifikasi Android 13+ -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Membaca kontak untuk tombol 📱 KONTAK -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
+
+    <!-- Alarm pengingat -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <application
@@ -14,6 +21,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.RRMotorReminder">
 
+        <!-- Halaman LOGIN -->
         <activity
             android:name=".LoginActivity"
             android:exported="true">
@@ -25,12 +33,19 @@
 
         </activity>
 
+        <!-- Halaman utama -->
         <activity
             android:name=".MainActivity"
             android:exported="false" />
 
+        <!-- Receiver untuk reminder ganti oli -->
         <receiver
             android:name=".ReminderReceiver"
+            android:exported="false" />
+
+        <!-- Receiver untuk menghapus riwayat otomatis setelah 2 hari -->
+        <receiver
+            android:name=".DeleteReminderReceiver"
             android:exported="false" />
 
     </application>
