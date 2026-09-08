@@ -53,7 +53,8 @@ public class ReminderReceiver extends BroadcastReceiver {
         }
 
         /*
-         * Tandai reminder sebagai terkirim.
+         * Tandai reminder sebagai terkirim
+         * dan simpan waktu penghapusan.
          */
         tandaiReminderTerkirim(
                 documentId
@@ -61,7 +62,7 @@ public class ReminderReceiver extends BroadcastReceiver {
 
         /*
          * Jadwalkan penghapusan otomatis
-         * 2 hari / 48 jam dari sekarang.
+         * 48 jam kemudian.
          */
         jadwalkanPenghapusan(
                 context,
@@ -214,19 +215,24 @@ public class ReminderReceiver extends BroadcastReceiver {
         Map<String, Object> update =
                 new HashMap<>();
 
+        /*
+         * Tandai sudah terkirim.
+         */
         update.put(
                 "reminderTerkirim",
                 true
         );
 
+        /*
+         * Simpan waktu terkirim.
+         */
         update.put(
                 "waktuTerkirim",
                 waktuTerkirim
         );
 
         /*
-         * Tetap simpan field deleteAt
-         * untuk pemeriksaan keamanan.
+         * Simpan waktu penghapusan.
          */
         update.put(
                 "deleteAt",
@@ -239,7 +245,7 @@ public class ReminderReceiver extends BroadcastReceiver {
                 .update(update)
                 .addOnFailureListener(
                         e -> {
-                            // Notifikasi tetap berjalan
+                            // Tidak menghentikan notifikasi.
                         }
                 );
     }
@@ -256,7 +262,8 @@ public class ReminderReceiver extends BroadcastReceiver {
         }
 
         /*
-         * 48 jam dari sekarang.
+         * Waktu penghapusan:
+         * sekarang + 48 jam.
          */
         long waktuHapus =
                 System.currentTimeMillis()
@@ -308,8 +315,7 @@ public class ReminderReceiver extends BroadcastReceiver {
         }
 
         /*
-         * Android 12+ memerlukan izin
-         * exact alarm untuk alarm tepat waktu.
+         * Android 12 ke atas.
          */
         if (Build.VERSION.SDK_INT >=
                 Build.VERSION_CODES.S) {
@@ -317,8 +323,8 @@ public class ReminderReceiver extends BroadcastReceiver {
             if (!alarmManager.canScheduleExactAlarms()) {
 
                 /*
-                 * Kalau exact alarm belum tersedia,
-                 * gunakan alarm biasa sebagai fallback.
+                 * Jika izin exact alarm belum tersedia,
+                 * gunakan alarm biasa sebagai cadangan.
                  */
                 alarmManager.set(
                         AlarmManager.RTC_WAKEUP,
@@ -331,7 +337,7 @@ public class ReminderReceiver extends BroadcastReceiver {
         }
 
         /*
-         * Jadwalkan alarm 48 jam kemudian.
+         * Android 6 sampai sekarang.
          */
         if (Build.VERSION.SDK_INT >=
                 Build.VERSION_CODES.M) {
