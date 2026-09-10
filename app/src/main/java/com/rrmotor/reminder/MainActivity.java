@@ -18,6 +18,7 @@ import android.widget.*;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 
@@ -25,6 +26,7 @@ import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.Query;
+import com.google.firebase.firestore.WriteBatch;
 
 import java.net.URLEncoder;
 import java.text.SimpleDateFormat;
@@ -54,6 +56,7 @@ public class MainActivity extends AppCompatActivity {
     private Button simpanButton;
     private Button dataBaruButton;
     private Button riwayatButton;
+    private Button hapusRiwayatButton;
 
     private String tanggalTerpilih = "";
 
@@ -152,7 +155,6 @@ public class MainActivity extends AppCompatActivity {
                     pesan
             );
 
-            // Supaya intent tidak diproses lagi
             intent.removeExtra(
                     "reminder_dari_notifikasi"
             );
@@ -547,6 +549,25 @@ public class MainActivity extends AppCompatActivity {
 
         utama.addView(
                 riwayatButton
+        );
+
+        // =====================================================
+        // HAPUS RIWAYAT
+        // =====================================================
+
+        hapusRiwayatButton =
+                new Button(this);
+
+        hapusRiwayatButton.setText(
+                "🗑️ HAPUS RIWAYAT"
+        );
+
+        hapusRiwayatButton.setOnClickListener(
+                v -> tampilkanMenuHapusRiwayat()
+        );
+
+        utama.addView(
+                hapusRiwayatButton
         );
 
         setContentView(scrollView);
@@ -1464,7 +1485,7 @@ public class MainActivity extends AppCompatActivity {
                 "TERKIRIM"
         };
 
-        new android.app.AlertDialog.Builder(this)
+        new AlertDialog.Builder(this)
                 .setTitle(
                         "📋 RIWAYAT REMINDER"
                 )
@@ -1624,7 +1645,7 @@ public class MainActivity extends AppCompatActivity {
 
                             if (daftar.isEmpty()) {
 
-                                new android.app.AlertDialog.Builder(
+                                new AlertDialog.Builder(
                                         this
                                 )
                                         .setTitle(
@@ -1648,7 +1669,7 @@ public class MainActivity extends AppCompatActivity {
                                             new String[0]
                                     );
 
-                            new android.app.AlertDialog.Builder(
+                            new AlertDialog.Builder(
                                     this
                             )
                                     .setTitle(
@@ -1681,6 +1702,343 @@ public class MainActivity extends AppCompatActivity {
                             Toast.makeText(
                                     this,
                                     "Gagal mengambil riwayat: "
+                                            + e.getMessage(),
+                                    Toast.LENGTH_LONG
+                            ).show();
+                        }
+                );
+    }
+
+    // =====================================================
+    // HAPUS RIWAYAT
+    // =====================================================
+
+    private void tampilkanMenuHapusRiwayat() {
+
+        String[] pilihan = {
+                "HAPUS SATU",
+                "HAPUS SEMUA TERKIRIM"
+        };
+
+        new AlertDialog.Builder(this)
+                .setTitle(
+                        "🗑️ HAPUS RIWAYAT"
+                )
+                .setItems(
+                        pilihan,
+                        (dialog, which) -> {
+
+                            if (which == 0) {
+
+                                tampilkanPilihRiwayatUntukDihapus();
+
+                            } else if (which == 1) {
+
+                                konfirmasiHapusSemuaTerkirim();
+                            }
+                        }
+                )
+                .setNegativeButton(
+                        "BATAL",
+                        null
+                )
+                .show();
+    }
+
+    // =====================================================
+    // HAPUS SATU RIWAYAT TERKIRIM
+    // =====================================================
+
+    private void tampilkanPilihRiwayatUntukDihapus() {
+
+        db.collection("reminders")
+                .whereEqualTo(
+                        "reminderTerkirim",
+                        true
+                )
+                .get()
+                .addOnSuccessListener(
+                        querySnapshot -> {
+
+                            if (querySnapshot.isEmpty()) {
+
+                                new AlertDialog.Builder(this)
+                                        .setTitle(
+                                                "🗑️ HAPUS SATU"
+                                        )
+                                        .setMessage(
+                                                "Tidak ada riwayat yang sudah terkirim."
+                                        )
+                                        .setPositiveButton(
+                                                "OK",
+                                                null
+                                        )
+                                        .show();
+
+                                return;
+                            }
+
+                            ArrayList<DocumentSnapshot>
+                                    dokumen =
+                                    new ArrayList<>();
+
+                            ArrayList<String>
+                                    daftar =
+                                    new ArrayList<>();
+
+                            for (
+                                    DocumentSnapshot doc :
+                                    querySnapshot.getDocuments()
+                            ) {
+
+                                dokumen.add(doc);
+
+                                String nama =
+                                        doc.getString(
+                                                "nama"
+                                        );
+
+                                String wa =
+                                        doc.getString(
+                                                "whatsapp"
+                                        );
+
+                                String tanggal =
+                                        doc.getString(
+                                                "tanggalInput"
+                                        );
+
+                                if (nama == null ||
+                                        nama.trim().isEmpty()) {
+
+                                    nama =
+                                            "Bapak/Ibu";
+                                }
+
+                                if (wa == null ||
+                                        wa.trim().isEmpty()) {
+
+                                    wa = "-";
+                                }
+
+                                if (tanggal == null ||
+                                        tanggal.trim().isEmpty()) {
+
+                                    tanggal = "-";
+                                }
+
+                                daftar.add(
+                                        nama
+                                                + "\nWA: "
+                                                + wa
+                                                + "\nTanggal: "
+                                                + tanggal
+                                );
+                            }
+
+                            String[] array =
+                                    daftar.toArray(
+                                            new String[0]
+                                    );
+
+                            new AlertDialog.Builder(this)
+                                    .setTitle(
+                                            "🗑️ PILIH DATA YANG DIHAPUS"
+                                    )
+                                    .setItems(
+                                            array,
+                                            (dialog, which) -> {
+
+                                                if (which >= 0 &&
+                                                        which < dokumen.size()) {
+
+                                                    konfirmasiHapusSatu(
+                                                            dokumen.get(which)
+                                                    );
+                                                }
+                                            }
+                                    )
+                                    .setNegativeButton(
+                                            "BATAL",
+                                            null
+                                    )
+                                    .show();
+                        }
+                )
+                .addOnFailureListener(
+                        e -> {
+
+                            Toast.makeText(
+                                    this,
+                                    "Gagal mengambil data terkirim: "
+                                            + e.getMessage(),
+                                    Toast.LENGTH_LONG
+                            ).show();
+                        }
+                );
+    }
+
+    private void konfirmasiHapusSatu(
+            DocumentSnapshot document
+    ) {
+
+        String nama =
+                document.getString("nama");
+
+        if (nama == null ||
+                nama.trim().isEmpty()) {
+
+            nama = "Bapak/Ibu";
+        }
+
+        final String documentId =
+                document.getId();
+
+        new AlertDialog.Builder(this)
+                .setTitle(
+                        "🗑️ HAPUS DATA?"
+                )
+                .setMessage(
+                        "Hapus riwayat:\n\n"
+                                + nama
+                                + "\n\n"
+                                + "Data yang dipilih akan dihapus permanen."
+                )
+                .setNegativeButton(
+                        "BATAL",
+                        null
+                )
+                .setPositiveButton(
+                        "HAPUS",
+                        (dialog, which) -> {
+
+                            db.collection("reminders")
+                                    .document(documentId)
+                                    .delete()
+                                    .addOnSuccessListener(
+                                            unused -> {
+
+                                                Toast.makeText(
+                                                        this,
+                                                        "Riwayat berhasil dihapus.",
+                                                        Toast.LENGTH_SHORT
+                                                ).show();
+                                            }
+                                    )
+                                    .addOnFailureListener(
+                                            e -> {
+
+                                                Toast.makeText(
+                                                        this,
+                                                        "Gagal menghapus: "
+                                                                + e.getMessage(),
+                                                        Toast.LENGTH_LONG
+                                                ).show();
+                                            }
+                                    );
+                        }
+                )
+                .show();
+    }
+
+    // =====================================================
+    // HAPUS SEMUA RIWAYAT TERKIRIM
+    // =====================================================
+
+    private void konfirmasiHapusSemuaTerkirim() {
+
+        new AlertDialog.Builder(this)
+                .setTitle(
+                        "🗑️ HAPUS SEMUA TERKIRIM?"
+                )
+                .setMessage(
+                        "Semua riwayat yang sudah TERKIRIM "
+                                + "akan dihapus sekaligus.\n\n"
+                                + "Data BELUM TERKIRIM tidak akan dihapus."
+                )
+                .setNegativeButton(
+                        "BATAL",
+                        null
+                )
+                .setPositiveButton(
+                        "HAPUS SEMUA",
+                        (dialog, which) -> {
+
+                            hapusSemuaReminderTerkirim();
+                        }
+                )
+                .show();
+    }
+
+    private void hapusSemuaReminderTerkirim() {
+
+        db.collection("reminders")
+                .whereEqualTo(
+                        "reminderTerkirim",
+                        true
+                )
+                .get()
+                .addOnSuccessListener(
+                        querySnapshot -> {
+
+                            if (querySnapshot.isEmpty()) {
+
+                                new AlertDialog.Builder(this)
+                                        .setMessage(
+                                                "Tidak ada riwayat terkirim yang dapat dihapus."
+                                        )
+                                        .setPositiveButton(
+                                                "OK",
+                                                null
+                                        )
+                                        .show();
+
+                                return;
+                            }
+
+                            WriteBatch batch =
+                                    db.batch();
+
+                            for (
+                                    DocumentSnapshot document :
+                                    querySnapshot.getDocuments()
+                            ) {
+
+                                batch.delete(
+                                        document.getReference()
+                                );
+                            }
+
+                            batch.commit()
+                                    .addOnSuccessListener(
+                                            unused -> {
+
+                                                Toast.makeText(
+                                                        this,
+                                                        "Semua riwayat terkirim berhasil dihapus.",
+                                                        Toast.LENGTH_LONG
+                                                ).show();
+                                            }
+                                    )
+                                    .addOnFailureListener(
+                                            e -> {
+
+                                                Toast.makeText(
+                                                        this,
+                                                        "Gagal menghapus semua: "
+                                                                + e.getMessage(),
+                                                        Toast.LENGTH_LONG
+                                                ).show();
+                                            }
+                                    );
+                        }
+                )
+                .addOnFailureListener(
+                        e -> {
+
+                            Toast.makeText(
+                                    this,
+                                    "Gagal mengambil riwayat terkirim: "
                                             + e.getMessage(),
                                     Toast.LENGTH_LONG
                             ).show();
@@ -1864,7 +2222,7 @@ public class MainActivity extends AppCompatActivity {
             detail.append(pesan);
         }
 
-        new android.app.AlertDialog.Builder(this)
+        new AlertDialog.Builder(this)
                 .setTitle(
                         "DETAIL REMINDER"
                 )
