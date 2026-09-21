@@ -12,157 +12,174 @@ import com.google.firebase.firestore.FirebaseFirestore;
 
 public class BootReceiver extends BroadcastReceiver {
 
-    @Override
-    public void onReceive(Context context, Intent intent) {
+@Override
+public void onReceive(Context context, Intent intent) {
 
-        if (intent == null || intent.getAction() == null) {
-            return;
-        }
+    String action = intent != null ? intent.getAction() : null;
 
-        String action = intent.getAction();
+    if (Intent.ACTION_BOOT_COMPLETED.equals(action)
+            || Intent.ACTION_MY_PACKAGE_REPLACED.equals(action)
+            || Intent.ACTION_TIME_CHANGED.equals(action)
+            || Intent.ACTION_TIMEZONE_CHANGED.equals(action)) {
 
-        if (!Intent.ACTION_BOOT_COMPLETED.equals(action)
-                && !Intent.ACTION_MY_PACKAGE_REPLACED.equals(action)
-                && !Intent.ACTION_TIME_SET.equals(action)
-                && !Intent.ACTION_TIMEZONE_CHANGED.equals(action)) {
-            return;
-        }
-
-        rescheduleSemuaReminder(context);
+        jadwalkanSemuaReminder(context);
     }
+}
 
-    private void rescheduleSemuaReminder(Context context) {
+private void jadwalkanSemuaReminder(Context context) {
 
-        FirebaseFirestore db = FirebaseFirestore.getInstance();
+    FirebaseFirestore db = FirebaseFirestore.getInstance();
 
-        db.collection("reminders")
-                .whereEqualTo("reminderTerkirim", false)
-                .get()
-                .addOnSuccessListener(querySnapshot -> {
+    db.collection("reminders")
+            .whereEqualTo("reminderTerkirim", false)
+            .get()
+            .addOnSuccessListener(querySnapshot -> {
 
-                    long sekarang = System.currentTimeMillis();
+                long sekarang = System.currentTimeMillis();
 
-                    for (DocumentSnapshot doc : querySnapshot.getDocuments()) {
+                for (DocumentSnapshot doc : querySnapshot.getDocuments()) {
 
-                        Long waktuObj = doc.getLong("waktuReminder");
+                    Long waktuReminderLong =
+                            doc.getLong("waktuReminder");
 
-                        if (waktuObj == null) {
-                            continue;
-                        }
-
-                        long waktuReminder = waktuObj;
-                        String documentId = doc.getId();
-
-                        String nama = doc.getString("nama");
-                        String wa = doc.getString("whatsapp");
-                        String pesan = doc.getString("pesanWhatsApp");
-
-                        if (nama == null || nama.trim().isEmpty()) {
-                            nama = "Bapak/Ibu";
-                        }
-
-                        if (wa == null) {
-                            wa = "";
-                        }
-
-                        if (pesan == null || pesan.trim().isEmpty()) {
-                            pesan = "Waktunya melakukan pengecekan atau pergantian oli motor di RR MOTOR.";
-                        }
-
-                        // Reminder sudah lewat.
-                        // Kirim segera ke ReminderReceiver.
-                        if (waktuReminder <= sekarang) {
-
-                            Intent reminderIntent =
-                                    new Intent(context, ReminderReceiver.class);
-
-                            reminderIntent.putExtra("documentId", documentId);
-                            reminderIntent.putExtra("nama", nama);
-                            reminderIntent.putExtra("wa", wa);
-                            reminderIntent.putExtra("pesan", pesan);
-
-                            context.sendBroadcast(reminderIntent);
-
-                        } else {
-
-                            // Reminder masih akan datang.
-                            // Hanya jadwalkan ulang, TIDAK kirim notifikasi.
-                            jadwalkanReminder(
-                                    context,
-                                    documentId,
-                                    nama,
-                                    wa,
-                                    pesan,
-                                    waktuReminder
-                            );
-                        }
+                    if (waktuReminderLong == null) {
+                        continue;
                     }
-                })
-                .addOnFailureListener(e -> {
-                    // Dicoba kembali pada pemeriksaan berikutnya.
-                });
+
+                    long waktuReminder = waktuReminderLong;
+
+                    String documentId = doc.getId();
+                    String nama = doc.getString("nama");
+                    String wa = doc.getString("whatsapp");
+                    String pesan = doc.getString("pesanWhatsApp");
+
+                    if (nama == null || nama.trim().isEmpty()) {
+                        nama = "Bapak/Ibu";
+                    }
+
+                    if (wa == null) {
+                        wa = "";
+                    }
+
+                    if (pesan == null || pesan.trim().isEmpty()) {
+                        pesan =
+                                "Waktunya melakukan pengecekan atau pergantian oli motor di RR MOTOR.";
+                    }
+
+                    /*
+                     * Jika reminder sudah lewat,
+                     * kirim langsung ke ReminderReceiver.
+                     */
+                    if (waktuReminder <= sekarang) {
+
+                        Intent reminderIntent =
+                                new Intent(context, ReminderReceiver.class);
+
+                        reminderIntent.putExtra(
+                                "documentId",
+                                documentId
+                        );
+
+                        reminderIntent.putExtra(
+                                "nama",
+                                nama
+                        );
+
+                        reminderIntent.putExtra(
+                                "wa",
+                                wa
+                        );
+
+                        reminderIntent.putExtra(
+                                "pesan",
+                                pesan
+                        );
+
+                        context.sendBroadcast(reminderIntent);
+
+                    } else {
+
+                        /*
+                         * Jika belum waktunya,
+                         * hanya jadwalkan alarm.
+                         */
+                        jadwalkanAlarm(
+                                context,
+                                waktuReminder,
+                                documentId,
+                                nama,
+                                wa,
+                                pesan
+                        );
+                    }
+                }
+            })
+            .addOnFailureListener(e -> {
+                // Akan dicoba kembali pada pemeriksaan berikutnya.
+            });
+}
+
+private void jadwalkanAlarm(
+        Context context,
+        long waktuReminder,
+        String documentId,
+        String nama,
+        String wa,
+        String pesan
+) {
+
+    AlarmManager alarmManager =
+            (AlarmManager) context.getSystemService(
+                    Context.ALARM_SERVICE
+            );
+
+    if (alarmManager == null) {
+        return;
     }
 
-    private void jadwalkanReminder(
-            Context context,
-            String documentId,
-            String nama,
-            String wa,
-            String pesan,
-            long waktuReminder
-    ) {
+    Intent reminderIntent =
+            new Intent(context, ReminderReceiver.class);
 
-        AlarmManager alarmManager =
-                (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+    reminderIntent.putExtra(
+            "documentId",
+            documentId
+    );
 
-        if (alarmManager == null) {
-            return;
-        }
+    reminderIntent.putExtra(
+            "nama",
+            nama
+    );
 
-        Intent intent =
-                new Intent(context, ReminderReceiver.class);
+    reminderIntent.putExtra(
+            "wa",
+            wa
+    );
 
-        intent.putExtra("documentId", documentId);
-        intent.putExtra("nama", nama);
-        intent.putExtra("wa", wa);
-        intent.putExtra("pesan", pesan);
+    reminderIntent.putExtra(
+            "pesan",
+            pesan
+    );
 
-        int requestCode = Math.abs(documentId.hashCode());
+    int requestCode =
+            Math.abs(documentId.hashCode());
 
-        PendingIntent pendingIntent =
-                PendingIntent.getBroadcast(
-                        context,
-                        requestCode,
-                        intent,
-                        PendingIntent.FLAG_UPDATE_CURRENT
-                                | PendingIntent.FLAG_IMMUTABLE
-                );
+    PendingIntent pendingIntent =
+            PendingIntent.getBroadcast(
+                    context,
+                    requestCode,
+                    reminderIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT
+                            | PendingIntent.FLAG_IMMUTABLE
+            );
 
-        // Hindari alarm ganda.
-        alarmManager.cancel(pendingIntent);
+    // Batalkan alarm lama agar tidak terjadi alarm ganda.
+    alarmManager.cancel(pendingIntent);
 
-        try {
+    try {
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
 
-                if (alarmManager.canScheduleExactAlarms()) {
-
-                    alarmManager.setExactAndAllowWhileIdle(
-                            AlarmManager.RTC_WAKEUP,
-                            waktuReminder,
-                            pendingIntent
-                    );
-
-                } else {
-
-                    alarmManager.setAndAllowWhileIdle(
-                            AlarmManager.RTC_WAKEUP,
-                            waktuReminder,
-                            pendingIntent
-                    );
-                }
-
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (alarmManager.canScheduleExactAlarms()) {
 
                 alarmManager.setExactAndAllowWhileIdle(
                         AlarmManager.RTC_WAKEUP,
@@ -172,25 +189,43 @@ public class BootReceiver extends BroadcastReceiver {
 
             } else {
 
-                alarmManager.setExact(
-                        AlarmManager.RTC_WAKEUP,
-                        waktuReminder,
-                        pendingIntent
-                );
-            }
-
-        } catch (SecurityException e) {
-
-            try {
-
                 alarmManager.setAndAllowWhileIdle(
                         AlarmManager.RTC_WAKEUP,
                         waktuReminder,
                         pendingIntent
                 );
-
-            } catch (Exception ignored) {
             }
+
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+
+            alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    waktuReminder,
+                    pendingIntent
+            );
+
+        } else {
+
+            alarmManager.setExact(
+                    AlarmManager.RTC_WAKEUP,
+                    waktuReminder,
+                    pendingIntent
+            );
+        }
+
+    } catch (SecurityException e) {
+
+        try {
+
+            alarmManager.setAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    waktuReminder,
+                    pendingIntent
+            );
+
+        } catch (Exception ignored) {
         }
     }
+}
+
 }
