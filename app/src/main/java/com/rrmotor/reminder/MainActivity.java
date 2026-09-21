@@ -107,7 +107,9 @@ public class MainActivity extends AppCompatActivity {
         buatTampilan();
 
         cekLoginFirebase();
-        bersihkanRiwayatLama();
+
+        // Cek reminder yang sudah jatuh tempo tetapi belum terkirim.
+        cekReminderTerlewat();
 
         prosesNotifikasiIntent(getIntent());
     }
@@ -119,6 +121,103 @@ public class MainActivity extends AppCompatActivity {
         setIntent(intent);
 
         prosesNotifikasiIntent(intent);
+
+        // Cek lagi jika Activity sudah terbuka ketika reminder datang.
+        cekReminderTerlewat();
+    }
+
+    // =====================================================
+    // CEK REMINDER TERLEWAT
+    // =====================================================
+
+    private void cekReminderTerlewat() {
+
+        if (auth.getCurrentUser() == null) {
+            return;
+        }
+
+        long sekarang =
+                System.currentTimeMillis();
+
+        db.collection("reminders")
+                .whereEqualTo(
+                        "reminderTerkirim",
+                        false
+                )
+                .whereLessThanOrEqualTo(
+                        "waktuReminder",
+                        sekarang
+                )
+                .get()
+                .addOnSuccessListener(querySnapshot -> {
+
+                    for (DocumentSnapshot doc :
+                            querySnapshot.getDocuments()) {
+
+                        String documentId =
+                                doc.getId();
+
+                        String nama =
+                                doc.getString("nama");
+
+                        String wa =
+                                doc.getString("whatsapp");
+
+                        String pesan =
+                                doc.getString("pesanWhatsApp");
+
+                        if (nama == null ||
+                                nama.trim().isEmpty()) {
+
+                            nama = "Bapak/Ibu";
+                        }
+
+                        if (wa == null) {
+                            wa = "";
+                        }
+
+                        if (pesan == null ||
+                                pesan.trim().isEmpty()) {
+
+                            pesan =
+                                    "Waktunya melakukan pengecekan atau pergantian oli motor di RR MOTOR.";
+                        }
+
+                        Intent reminderIntent =
+                                new Intent(
+                                        this,
+                                        ReminderReceiver.class
+                                );
+
+                        reminderIntent.putExtra(
+                                "documentId",
+                                documentId
+                        );
+
+                        reminderIntent.putExtra(
+                                "nama",
+                                nama
+                        );
+
+                        reminderIntent.putExtra(
+                                "wa",
+                                wa
+                        );
+
+                        reminderIntent.putExtra(
+                                "pesan",
+                                pesan
+                        );
+
+                        sendBroadcast(
+                                reminderIntent
+                        );
+                    }
+
+                })
+                .addOnFailureListener(e -> {
+                    // Akan dicoba lagi ketika aplikasi dibuka.
+                });
     }
 
     // =====================================================
@@ -142,10 +241,14 @@ public class MainActivity extends AppCompatActivity {
         }
 
         String wa =
-                intent.getStringExtra("reminder_wa");
+                intent.getStringExtra(
+                        "reminder_wa"
+                );
 
         String pesan =
-                intent.getStringExtra("reminder_pesan");
+                intent.getStringExtra(
+                        "reminder_pesan"
+                );
 
         if (wa != null &&
                 !wa.trim().isEmpty()) {
@@ -693,16 +796,10 @@ public class MainActivity extends AppCompatActivity {
                     );
 
             long maksimal =
-                    hitungKelipatanBerikutnya(
-                            km,
-                            1500
-                    );
+                    km + 1500;
 
             long palingLambat =
-                    hitungKelipatanBerikutnya(
-                            km,
-                            2000
-                    );
+                    km + 2000;
 
             hasilKmText.setText(
                     "Maksimal ganti oli: "
@@ -717,18 +814,6 @@ public class MainActivity extends AppCompatActivity {
 
             hasilKmText.setText("");
         }
-    }
-
-    private long hitungKelipatanBerikutnya(
-            long km,
-            long kelipatan
-    ) {
-
-        if (km < 0) {
-            return kelipatan;
-        }
-
-        return km + kelipatan;
     }
 
     private String formatKm(long angka) {
@@ -987,6 +1072,7 @@ public class MainActivity extends AppCompatActivity {
                 0L
         );
 
+        // Tidak digunakan lagi untuk auto-delete.
         data.put(
                 "deleteAt",
                 0L
@@ -1131,16 +1217,10 @@ public class MainActivity extends AppCompatActivity {
                         );
 
                 long maksimal =
-                        hitungKelipatanBerikutnya(
-                                angkaKm,
-                                1500
-                        );
+                        angkaKm + 1500;
 
                 long palingLambat =
-                        hitungKelipatanBerikutnya(
-                                angkaKm,
-                                2000
-                        );
+                        angkaKm + 2000;
 
                 pesan.append(
                         "KM terakhir: "
@@ -1265,6 +1345,48 @@ public class MainActivity extends AppCompatActivity {
             String pesan
     ) {
 
+        /*
+         * Jika reminder sudah jatuh tempo,
+         * langsung kirim ke ReminderReceiver.
+         *
+         * ReminderReceiver akan mengecek Firestore
+         * agar tidak terjadi notifikasi ganda.
+         */
+        if (waktu <= System.currentTimeMillis()) {
+
+            Intent reminderIntent =
+                    new Intent(
+                            this,
+                            ReminderReceiver.class
+                    );
+
+            reminderIntent.putExtra(
+                    "documentId",
+                    documentId
+            );
+
+            reminderIntent.putExtra(
+                    "nama",
+                    nama
+            );
+
+            reminderIntent.putExtra(
+                    "wa",
+                    wa
+            );
+
+            reminderIntent.putExtra(
+                    "pesan",
+                    pesan
+            );
+
+            sendBroadcast(
+                    reminderIntent
+            );
+
+            return;
+        }
+
         AlarmManager alarm =
                 (AlarmManager)
                         getSystemService(
@@ -1315,33 +1437,74 @@ public class MainActivity extends AppCompatActivity {
                                 PendingIntent.FLAG_IMMUTABLE
                 );
 
+        // Hindari alarm ganda.
         alarm.cancel(pending);
 
-        if (Build.VERSION.SDK_INT >=
-                Build.VERSION_CODES.S) {
+        try {
 
-            if (!alarm.canScheduleExactAlarms()) {
+            if (Build.VERSION.SDK_INT >=
+                    Build.VERSION_CODES.S) {
 
-                try {
+                if (alarm.canScheduleExactAlarms()) {
 
-                    Intent settingsIntent =
-                            new Intent(
-                                    Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM
-                            );
-
-                    settingsIntent.setData(
-                            Uri.parse(
-                                    "package:"
-                                            + getPackageName()
-                            )
+                    alarm.setExactAndAllowWhileIdle(
+                            AlarmManager.RTC_WAKEUP,
+                            waktu,
+                            pending
                     );
 
-                    startActivity(
-                            settingsIntent
-                    );
+                } else {
 
-                } catch (Exception ignored) {
+                    try {
+
+                        Intent settingsIntent =
+                                new Intent(
+                                        Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM
+                                );
+
+                        settingsIntent.setData(
+                                Uri.parse(
+                                        "package:"
+                                                + getPackageName()
+                                )
+                        );
+
+                        startActivity(
+                                settingsIntent
+                        );
+
+                    } catch (Exception ignored) {
+                    }
+
+                    // Fallback jika exact alarm belum diizinkan.
+                    alarm.setAndAllowWhileIdle(
+                            AlarmManager.RTC_WAKEUP,
+                            waktu,
+                            pending
+                    );
                 }
+
+            } else if (Build.VERSION.SDK_INT >=
+                    Build.VERSION_CODES.M) {
+
+                alarm.setExactAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        waktu,
+                        pending
+                );
+
+            } else {
+
+                alarm.setExact(
+                        AlarmManager.RTC_WAKEUP,
+                        waktu,
+                        pending
+                );
+            }
+
+        } catch (SecurityException e) {
+
+            try {
 
                 alarm.setAndAllowWhileIdle(
                         AlarmManager.RTC_WAKEUP,
@@ -1349,22 +1512,8 @@ public class MainActivity extends AppCompatActivity {
                         pending
                 );
 
-                return;
+            } catch (Exception ignored) {
             }
-
-            alarm.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    waktu,
-                    pending
-            );
-
-        } else {
-
-            alarm.setAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    waktu,
-                    pending
-            );
         }
     }
 
@@ -1746,7 +1895,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // =====================================================
-    // HAPUS SATU RIWAYAT TERKIRIM
+    // HAPUS SATU
     // =====================================================
 
     private void tampilkanPilihRiwayatUntukDihapus() {
@@ -1942,7 +2091,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // =====================================================
-    // HAPUS SEMUA RIWAYAT TERKIRIM
+    // HAPUS SEMUA TERKIRIM
     // =====================================================
 
     private void konfirmasiHapusSemuaTerkirim() {
@@ -2234,50 +2383,6 @@ public class MainActivity extends AppCompatActivity {
                         null
                 )
                 .show();
-    }
-
-    // =====================================================
-    // PEMBERSIHAN RIWAYAT LAMA
-    // HANYA TERKIRIM YANG BOLEH DIHAPUS
-    // =====================================================
-
-    private void bersihkanRiwayatLama() {
-
-        if (auth.getCurrentUser() == null) {
-            return;
-        }
-
-        long sekarang =
-                System.currentTimeMillis();
-
-        db.collection("reminders")
-                .whereEqualTo(
-                        "reminderTerkirim",
-                        true
-                )
-                .whereLessThanOrEqualTo(
-                        "deleteAt",
-                        sekarang
-                )
-                .get()
-                .addOnSuccessListener(
-                        querySnapshot -> {
-
-                            for (
-                                    DocumentSnapshot doc :
-                                    querySnapshot.getDocuments()
-                            ) {
-
-                                doc.getReference()
-                                        .delete();
-                            }
-                        }
-                )
-                .addOnFailureListener(
-                        e -> {
-                            // Tidak mengganggu aplikasi
-                        }
-                );
     }
 
     // =====================================================
