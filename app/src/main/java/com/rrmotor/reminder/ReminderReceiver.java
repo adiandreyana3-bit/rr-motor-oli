@@ -1,6 +1,5 @@
 package com.rrmotor.reminder;
 
-import android.app.AlarmManager;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -11,77 +10,158 @@ import android.os.Build;
 
 import androidx.core.app.NotificationCompat;
 
+import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FirebaseFirestore;
-
-import java.util.HashMap;
-import java.util.Map;
 
 public class ReminderReceiver extends BroadcastReceiver {
 
-    private static final String CHANNEL_ID =
-            "RR_MOTOR_REMINDER";
+    private static final String CHANNEL_ID = "RR_MOTOR_REMINDER";
 
     @Override
-    public void onReceive(
-            Context context,
-            Intent intent
-    ) {
+    public void onReceive(Context context, Intent intent) {
 
-        String documentId =
-                intent.getStringExtra("documentId");
+        if (intent == null) {
+            return;
+        }
 
-        String nama =
-                intent.getStringExtra("nama");
+        String documentId = intent.getStringExtra("documentId");
 
-        String wa =
-                intent.getStringExtra("wa");
+        if (documentId == null || documentId.trim().isEmpty()) {
+            return;
+        }
 
-        String pesan =
-                intent.getStringExtra("pesan");
+        String nama = intent.getStringExtra("nama");
+        String wa = intent.getStringExtra("wa");
+        String pesan = intent.getStringExtra("pesan");
 
-        if (nama == null ||
-                nama.trim().isEmpty()) {
-
+        if (nama == null || nama.trim().isEmpty()) {
             nama = "Bapak/Ibu";
         }
 
-        if (pesan == null ||
-                pesan.trim().isEmpty()) {
-
-            pesan =
-                    "Waktunya melakukan pengecekan atau pergantian oli motor di RR MOTOR.";
+        if (wa == null) {
+            wa = "";
         }
 
-        /*
-         * Tandai reminder sebagai terkirim
-         * dan simpan waktu penghapusan.
-         */
-        tandaiReminderTerkirim(
-                documentId
-        );
+        if (pesan == null || pesan.trim().isEmpty()) {
+            pesan = "Waktunya melakukan pengecekan atau pergantian oli motor di RR MOTOR.";
+        }
 
-        /*
-         * Jadwalkan penghapusan otomatis
-         * 48 jam kemudian.
-         */
-        jadwalkanPenghapusan(
-                context,
-                documentId
-        );
+        final String namaFinal = nama;
+        final String waFinal = wa;
+        final String pesanFinal = pesan;
 
-        /*
-         * Buat channel notifikasi.
-         */
-        buatChannel(context);
+        FirebaseFirestore db =
+                FirebaseFirestore.getInstance();
 
-        /*
-         * Intent ketika notifikasi ditekan.
-         */
+        PendingResult pendingResult = goAsync();
+
+        db.collection("reminders")
+                .document(documentId)
+                .get()
+                .addOnSuccessListener(documentSnapshot -> {
+
+                    if (!documentSnapshot.exists()) {
+                        pendingResult.finish();
+                        return;
+                    }
+
+                    Boolean sudahTerkirim =
+                            documentSnapshot.getBoolean("reminderTerkirim");
+
+                    if (Boolean.TRUE.equals(sudahTerkirim)) {
+
+                        // Sudah pernah dikirim.
+                        // Jangan kirim lagi.
+                        pendingResult.finish();
+                        return;
+                    }
+
+                    long sekarang =
+                            System.currentTimeMillis();
+
+                    db.runTransaction(transaction -> {
+
+                        DocumentSnapshot fresh =
+                                transaction.get(
+                                        db.collection("reminders")
+                                                .document(documentId)
+                                );
+
+                        if (!fresh.exists()) {
+                            return false;
+                        }
+
+                        Boolean terkirim =
+                                fresh.getBoolean("reminderTerkirim");
+
+                        if (Boolean.TRUE.equals(terkirim)) {
+                            return false;
+                        }
+
+                        transaction.update(
+                                db.collection("reminders")
+                                        .document(documentId),
+                                "reminderTerkirim",
+                                true,
+                                "waktuTerkirim",
+                                sekarang,
+                                "deleteAt",
+                                0L
+                        );
+
+                        return true;
+
+                    }).addOnSuccessListener(berhasil -> {
+
+                        if (Boolean.TRUE.equals(berhasil)) {
+
+                            tampilkanNotifikasi(
+                                    context,
+                                    documentId,
+                                    namaFinal,
+                                    waFinal,
+                                    pesanFinal
+                            );
+                        }
+
+                        pendingResult.finish();
+
+                    }).addOnFailureListener(e -> {
+
+                        // Jika transaksi gagal,
+                        // status tetap BELUM TERKIRIM.
+                        // Sistem bisa mencoba kembali nanti.
+                        pendingResult.finish();
+                    });
+
+                })
+                .addOnFailureListener(e -> {
+                    pendingResult.finish();
+                });
+    }
+
+    private void tampilkanNotifikasi(
+            Context context,
+            String documentId,
+            String nama,
+            String wa,
+            String pesan
+    ) {
+
+        NotificationManager notificationManager =
+                (NotificationManager)
+                        context.getSystemService(
+                                Context.NOTIFICATION_SERVICE
+                        );
+
+        if (notificationManager == null) {
+            return;
+        }
+
+        buatNotificationChannel(notificationManager);
+
         Intent bukaIntent =
-                new Intent(
-                        context,
-                        MainActivity.class
-                );
+                new Intent(context, MainActivity.class);
 
         bukaIntent.putExtra(
                 "reminder_nama",
@@ -103,46 +183,31 @@ public class ReminderReceiver extends BroadcastReceiver {
                 true
         );
 
-        bukaIntent.setFlags(
-                Intent.FLAG_ACTIVITY_NEW_TASK |
-                        Intent.FLAG_ACTIVITY_CLEAR_TOP |
-                        Intent.FLAG_ACTIVITY_SINGLE_TOP
+        bukaIntent.putExtra(
+                "documentId",
+                documentId
         );
 
-        int requestCode;
-
-        if (documentId != null &&
-                !documentId.trim().isEmpty()) {
-
-            requestCode =
-                    Math.abs(
-                            documentId.hashCode()
-                    );
-
-            if (requestCode == 0) {
-                requestCode = 1;
-            }
-
-        } else {
-
-            requestCode =
-                    (int)
-                            (System.currentTimeMillis()
-                                    & 0x7fffffff);
-
-            if (requestCode == 0) {
-                requestCode = 1;
-            }
-        }
+        bukaIntent.setFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        | Intent.FLAG_ACTIVITY_SINGLE_TOP
+        );
 
         PendingIntent pendingIntent =
                 PendingIntent.getActivity(
                         context,
-                        requestCode,
+                        Math.abs(documentId.hashCode()),
                         bukaIntent,
-                        PendingIntent.FLAG_UPDATE_CURRENT |
-                                PendingIntent.FLAG_IMMUTABLE
+                        PendingIntent.FLAG_UPDATE_CURRENT
+                                | PendingIntent.FLAG_IMMUTABLE
                 );
+
+        String judul =
+                "🏍️ RR MOTOR";
+
+        String isi =
+                "Reminder ganti oli untuk " + nama;
 
         NotificationCompat.Builder builder =
                 new NotificationCompat.Builder(
@@ -152,13 +217,8 @@ public class ReminderReceiver extends BroadcastReceiver {
                         .setSmallIcon(
                                 android.R.drawable.ic_popup_reminder
                         )
-                        .setContentTitle(
-                                "🏍️ RR MOTOR"
-                        )
-                        .setContentText(
-                                "Reminder ganti oli untuk "
-                                        + nama
-                        )
+                        .setContentTitle(judul)
+                        .setContentText(isi)
                         .setStyle(
                                 new NotificationCompat.BigTextStyle()
                                         .bigText(pesan)
@@ -166,204 +226,23 @@ public class ReminderReceiver extends BroadcastReceiver {
                         .setPriority(
                                 NotificationCompat.PRIORITY_HIGH
                         )
+                        .setCategory(
+                                NotificationCompat.CATEGORY_REMINDER
+                        )
                         .setAutoCancel(true)
-                        .setContentIntent(
-                                pendingIntent
-                        );
+                        .setContentIntent(pendingIntent);
 
-        NotificationManager manager =
-                (NotificationManager)
-                        context.getSystemService(
-                                Context.NOTIFICATION_SERVICE
-                        );
-
-        if (manager != null) {
-
-            manager.notify(
-                    requestCode,
-                    builder.build()
-            );
-        }
+        notificationManager.notify(
+                Math.abs(documentId.hashCode()),
+                builder.build()
+        );
     }
 
-    private void tandaiReminderTerkirim(
-            String documentId
+    private void buatNotificationChannel(
+            NotificationManager notificationManager
     ) {
 
-        if (documentId == null ||
-                documentId.trim().isEmpty()) {
-
-            return;
-        }
-
-        long waktuTerkirim =
-                System.currentTimeMillis();
-
-        /*
-         * 2 hari = 48 jam.
-         */
-        long duaHari =
-                2L
-                        * 24L
-                        * 60L
-                        * 60L
-                        * 1000L;
-
-        long deleteAt =
-                waktuTerkirim + duaHari;
-
-        Map<String, Object> update =
-                new HashMap<>();
-
-        /*
-         * Tandai sudah terkirim.
-         */
-        update.put(
-                "reminderTerkirim",
-                true
-        );
-
-        /*
-         * Simpan waktu terkirim.
-         */
-        update.put(
-                "waktuTerkirim",
-                waktuTerkirim
-        );
-
-        /*
-         * Simpan waktu penghapusan.
-         */
-        update.put(
-                "deleteAt",
-                deleteAt
-        );
-
-        FirebaseFirestore.getInstance()
-                .collection("reminders")
-                .document(documentId)
-                .update(update)
-                .addOnFailureListener(
-                        e -> {
-                            // Tidak menghentikan notifikasi.
-                        }
-                );
-    }
-
-    private void jadwalkanPenghapusan(
-            Context context,
-            String documentId
-    ) {
-
-        if (documentId == null ||
-                documentId.trim().isEmpty()) {
-
-            return;
-        }
-
-        /*
-         * Waktu penghapusan:
-         * sekarang + 48 jam.
-         */
-        long waktuHapus =
-                System.currentTimeMillis()
-                        + (
-                        2L
-                                * 24L
-                                * 60L
-                                * 60L
-                                * 1000L
-                );
-
-        Intent deleteIntent =
-                new Intent(
-                        context,
-                        DeleteReminderReceiver.class
-                );
-
-        deleteIntent.putExtra(
-                "documentId",
-                documentId
-        );
-
-        int requestCode =
-                Math.abs(
-                        documentId.hashCode()
-                );
-
-        if (requestCode == 0) {
-            requestCode = 1;
-        }
-
-        PendingIntent deletePendingIntent =
-                PendingIntent.getBroadcast(
-                        context,
-                        requestCode,
-                        deleteIntent,
-                        PendingIntent.FLAG_UPDATE_CURRENT |
-                                PendingIntent.FLAG_IMMUTABLE
-                );
-
-        AlarmManager alarmManager =
-                (AlarmManager)
-                        context.getSystemService(
-                                Context.ALARM_SERVICE
-                        );
-
-        if (alarmManager == null) {
-            return;
-        }
-
-        /*
-         * Android 12 ke atas.
-         */
-        if (Build.VERSION.SDK_INT >=
-                Build.VERSION_CODES.S) {
-
-            if (!alarmManager.canScheduleExactAlarms()) {
-
-                /*
-                 * Jika izin exact alarm belum tersedia,
-                 * gunakan alarm biasa sebagai cadangan.
-                 */
-                alarmManager.set(
-                        AlarmManager.RTC_WAKEUP,
-                        waktuHapus,
-                        deletePendingIntent
-                );
-
-                return;
-            }
-        }
-
-        /*
-         * Android 6 sampai sekarang.
-         */
-        if (Build.VERSION.SDK_INT >=
-                Build.VERSION_CODES.M) {
-
-            alarmManager.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    waktuHapus,
-                    deletePendingIntent
-            );
-
-        } else {
-
-            alarmManager.setExact(
-                    AlarmManager.RTC_WAKEUP,
-                    waktuHapus,
-                    deletePendingIntent
-            );
-        }
-    }
-
-    private void buatChannel(
-            Context context
-    ) {
-
-        if (Build.VERSION.SDK_INT >=
-                Build.VERSION_CODES.O) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
 
             NotificationChannel channel =
                     new NotificationChannel(
@@ -373,20 +252,14 @@ public class ReminderReceiver extends BroadcastReceiver {
                     );
 
             channel.setDescription(
-                    "Notifikasi pengingat ganti oli RR MOTOR"
+                    "Pengingat ganti oli pelanggan RR MOTOR"
             );
 
-            NotificationManager manager =
-                    context.getSystemService(
-                            NotificationManager.class
-                    );
+            channel.enableVibration(true);
 
-            if (manager != null) {
-
-                manager.createNotificationChannel(
-                        channel
-                );
-            }
+            notificationManager.createNotificationChannel(
+                    channel
+            );
         }
     }
 }
