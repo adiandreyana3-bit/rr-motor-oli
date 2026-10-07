@@ -6,16 +6,14 @@ import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
 
-import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.IntentSenderRequest;
 
+import com.google.android.gms.auth.api.identity.AuthorizationClient;
 import com.google.android.gms.auth.api.identity.AuthorizationRequest;
 import com.google.android.gms.auth.api.identity.AuthorizationResult;
 import com.google.android.gms.auth.api.identity.Identity;
-import com.google.android.gms.auth.api.identity.AuthorizationClient;
 import com.google.android.gms.common.api.ApiException;
 import com.google.android.gms.common.api.Scope;
-import com.google.api.client.googleapis.extensions.android.gms.auth.UserRecoverableAuthIOException;
 import com.google.api.client.http.ByteArrayContent;
 import com.google.api.client.http.HttpRequestInitializer;
 import com.google.api.client.http.javanet.NetHttpTransport;
@@ -24,7 +22,7 @@ import com.google.api.services.drive.Drive;
 import com.google.api.services.drive.DriveScopes;
 
 import java.io.ByteArrayOutputStream;
-import java.util.Arrays;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -51,11 +49,13 @@ public class GoogleDriveHelper {
     private DriveCallback pendingAuthorizationCallback;
 
     public GoogleDriveHelper(Context context) {
-        this.context = context.getApplicationContext();
+
+        this.context =
+                context.getApplicationContext();
     }
 
     // ============================================================
-    // CALLBACK
+    // CALLBACK BACKUP
     // ============================================================
 
     public interface DriveCallback {
@@ -65,6 +65,10 @@ public class GoogleDriveHelper {
         void onError(Exception e);
     }
 
+    // ============================================================
+    // CALLBACK DATA
+    // ============================================================
+
     public interface DataCallback {
 
         void onSuccess(String json);
@@ -73,7 +77,7 @@ public class GoogleDriveHelper {
     }
 
     // ============================================================
-    // AUTHORIZATION
+    // MINTA IZIN GOOGLE DRIVE
     // ============================================================
 
     public void mintaIzinDrive(
@@ -113,7 +117,8 @@ public class GoogleDriveHelper {
 
                                 if (result.hasResolution()) {
 
-                                    IntentSenderRequest senderRequest =
+                                    IntentSenderRequest
+                                            senderRequest =
                                             new IntentSenderRequest
                                                     .Builder(
                                                             result
@@ -122,10 +127,23 @@ public class GoogleDriveHelper {
                                                     )
                                                     .build();
 
-                                    launchAuthorization(
-                                            activity,
-                                            senderRequest
-                                    );
+                                    if (activity
+                                            instanceof MainActivity) {
+
+                                        ((MainActivity)
+                                                activity)
+                                                .launchDriveAuthorization(
+                                                        senderRequest
+                                                );
+
+                                    } else {
+
+                                        kirimError(
+                                                new Exception(
+                                                        "Activity tidak mendukung Google Drive."
+                                                )
+                                        );
+                                    }
 
                                 } else {
 
@@ -139,58 +157,23 @@ public class GoogleDriveHelper {
                             activity,
                             e -> {
 
-                                if (pendingAuthorizationCallback
-                                        != null) {
-
-                                    pendingAuthorizationCallback
-                                            .onError(
-                                                    e
-                                            );
-
-                                    pendingAuthorizationCallback =
-                                            null;
-                                }
+                                kirimError(
+                                        e
+                                );
                             }
                     );
 
         } catch (Exception e) {
 
-            if (callback != null) {
-                callback.onError(e);
-            }
+            kirimError(
+                    e
+            );
         }
     }
 
-    /*
-     * MainActivity harus memanggil metode ini melalui
-     * ActivityResultLauncher.
-     */
-    private void launchAuthorization(
-            Activity activity,
-            IntentSenderRequest request
-    ) {
-
-        if (activity instanceof MainActivity) {
-
-            ((MainActivity) activity)
-                    .launchDriveAuthorization(request);
-
-        } else {
-
-            if (pendingAuthorizationCallback != null) {
-
-                pendingAuthorizationCallback
-                        .onError(
-                                new Exception(
-                                        "Activity tidak mendukung authorization Google Drive."
-                                )
-                        );
-
-                pendingAuthorizationCallback =
-                        null;
-            }
-        }
-    }
+    // ============================================================
+    // HASIL AUTHORIZATION
+    // ============================================================
 
     public void prosesHasilAuthorization(
             Activity activity,
@@ -214,16 +197,21 @@ public class GoogleDriveHelper {
 
         } catch (ApiException e) {
 
-            if (pendingAuthorizationCallback != null) {
+            kirimError(
+                    e
+            );
 
-                pendingAuthorizationCallback
-                        .onError(e);
+        } catch (Exception e) {
 
-                pendingAuthorizationCallback =
-                        null;
-            }
+            kirimError(
+                    e
+            );
         }
     }
+
+    // ============================================================
+    // PROSES TOKEN
+    // ============================================================
 
     private void gunakanHasilAuthorization(
             AuthorizationResult result
@@ -263,14 +251,13 @@ public class GoogleDriveHelper {
                             )
                             .build();
 
-            if (pendingAuthorizationCallback
-                    != null) {
+            DriveCallback callback =
+                    pendingAuthorizationCallback;
 
-                DriveCallback callback =
-                        pendingAuthorizationCallback;
+            pendingAuthorizationCallback =
+                    null;
 
-                pendingAuthorizationCallback =
-                        null;
+            if (callback != null) {
 
                 mainHandler.post(
                         callback::onSuccess
@@ -279,23 +266,36 @@ public class GoogleDriveHelper {
 
         } catch (Exception e) {
 
-            if (pendingAuthorizationCallback != null) {
-
-                DriveCallback callback =
-                        pendingAuthorizationCallback;
-
-                pendingAuthorizationCallback =
-                        null;
-
-                mainHandler.post(
-                        () -> callback.onError(e)
-                );
-            }
+            kirimError(
+                    e
+            );
         }
     }
 
     // ============================================================
-    // UPLOAD
+    // ERROR AUTHORIZATION
+    // ============================================================
+
+    private void kirimError(
+            Exception e
+    ) {
+
+        DriveCallback callback =
+                pendingAuthorizationCallback;
+
+        pendingAuthorizationCallback =
+                null;
+
+        if (callback != null) {
+
+            mainHandler.post(
+                    () -> callback.onError(e)
+            );
+        }
+    }
+
+    // ============================================================
+    // UPLOAD DATABASE
     // ============================================================
 
     public void uploadDatabase(
@@ -314,75 +314,97 @@ public class GoogleDriveHelper {
             return;
         }
 
-        executor.execute(() -> {
+        executor.execute(
+                () -> {
 
-            try {
+                    try {
 
-                com.google.api.services.drive.model.File existing =
-                        cariFileDatabaseInternal();
+                        com.google.api.services.drive.model.File
+                                file =
+                                cariFileDatabaseInternal();
 
-                ByteArrayContent content =
-                        new ByteArrayContent(
-                                MIME_TYPE,
+                        byte[] data =
                                 json.getBytes(
-                                        java.nio.charset.StandardCharsets.UTF_8
-                                )
+                                        StandardCharsets.UTF_8
+                                );
+
+                        ByteArrayContent content =
+                                new ByteArrayContent(
+                                        MIME_TYPE,
+                                        data
+                                );
+
+                        if (file == null) {
+
+                            /*
+                             * FILE BELUM ADA
+                             *
+                             * Buat file baru.
+                             */
+
+                            com.google.api.services.drive.model.File
+                                    metadata =
+                                    new com.google.api.services.drive.model.File();
+
+                            metadata.setName(
+                                    FILE_NAME
+                            );
+
+                            metadata.setMimeType(
+                                    MIME_TYPE
+                            );
+
+                            driveService
+                                    .files()
+                                    .create(
+                                            metadata,
+                                            content
+                                    )
+                                    .setFields(
+                                            "id,name,mimeType"
+                                    )
+                                    .execute();
+
+                        } else {
+
+                            /*
+                             * FILE SUDAH ADA
+                             *
+                             * Update file lama.
+                             */
+
+                            driveService
+                                    .files()
+                                    .update(
+                                            file.getId(),
+                                            null,
+                                            content
+                                    )
+                                    .setFields(
+                                            "id,name,mimeType"
+                                    )
+                                    .execute();
+                        }
+
+                        mainHandler.post(
+                                callback::onSuccess
                         );
 
-                if (existing == null) {
+                    } catch (Exception e) {
 
-                    com.google.api.services.drive.model.File metadata =
-                            new com.google.api.services.drive.model.File();
-
-                    metadata.setName(
-                            FILE_NAME
-                    );
-
-                    metadata.setMimeType(
-                            MIME_TYPE
-                    );
-
-                    driveService
-                            .files()
-                            .create(
-                                    metadata,
-                                    content
-                            )
-                            .setFields(
-                                    "id,name"
-                            )
-                            .execute();
-
-                } else {
-
-                    driveService
-                            .files()
-                            .update(
-                                    existing.getId(),
-                                    null,
-                                    content
-                            )
-                            .setFields(
-                                    "id,name"
-                            )
-                            .execute();
+                        mainHandler.post(
+                                () ->
+                                        callback.onError(
+                                                e
+                                        )
+                        );
+                    }
                 }
-
-                mainHandler.post(
-                        callback::onSuccess
-                );
-
-            } catch (Exception e) {
-
-                mainHandler.post(
-                        () -> callback.onError(e)
-                );
-            }
-        });
+        );
     }
 
     // ============================================================
-    // DOWNLOAD
+    // DOWNLOAD DATABASE
     // ============================================================
 
     public void downloadDatabase(
@@ -400,57 +422,86 @@ public class GoogleDriveHelper {
             return;
         }
 
-        executor.execute(() -> {
+        executor.execute(
+                () -> {
 
-            try {
+                    try {
 
-                com.google.api.services.drive.model.File file =
-                        cariFileDatabaseInternal();
+                        com.google.api.services.drive.model.File
+                                file =
+                                cariFileDatabaseInternal();
 
-                if (file == null) {
+                        /*
+                         * BACKUP BELUM ADA
+                         */
 
-                    mainHandler.post(
-                            () -> callback.onSuccess("")
-                    );
+                        if (file == null) {
 
-                    return;
+                            mainHandler.post(
+                                    () ->
+                                            callback.onSuccess(
+                                                    ""
+                                            )
+                            );
+
+                            return;
+                        }
+
+                        /*
+                         * DOWNLOAD FILE
+                         */
+
+                        ByteArrayOutputStream output =
+                                new ByteArrayOutputStream();
+
+                        driveService
+                                .files()
+                                .get(
+                                        file.getId()
+                                )
+                                .executeMediaAndDownloadTo(
+                                        output
+                                );
+
+                        String json =
+                                output.toString(
+                                        StandardCharsets.UTF_8.name()
+                                );
+
+                        mainHandler.post(
+                                () ->
+                                        callback.onSuccess(
+                                                json
+                                        )
+                        );
+
+                    } catch (Exception e) {
+
+                        mainHandler.post(
+                                () ->
+                                        callback.onError(
+                                                e
+                                        )
+                        );
+                    }
                 }
-
-                ByteArrayOutputStream output =
-                        new ByteArrayOutputStream();
-
-                driveService
-                        .files()
-                        .get(file.getId())
-                        .executeMediaAndDownloadTo(
-                                output
-                        );
-
-                String json =
-                        output.toString(
-                                java.nio.charset.StandardCharsets.UTF_8.name()
-                        );
-
-                mainHandler.post(
-                        () -> callback.onSuccess(json)
-                );
-
-            } catch (Exception e) {
-
-                mainHandler.post(
-                        () -> callback.onError(e)
-                );
-            }
-        });
+        );
     }
 
     // ============================================================
-    // CARI FILE
+    // CARI FILE BACKUP
     // ============================================================
 
     private com.google.api.services.drive.model.File
     cariFileDatabaseInternal()
             throws Exception {
+
+        if (driveService == null) {
+
+            throw new Exception(
+                    "Google Drive belum siap."
+            );
+        }
 
         String query =
                 "name = '"
@@ -470,7 +521,8 @@ public class GoogleDriveHelper {
                         .setPageSize(10)
                         .execute();
 
-        List<com.google.api.services.drive.model.File> files =
+        List<com.google.api.services.drive.model.File>
+                files =
                 result.getFiles();
 
         if (files == null
@@ -483,14 +535,29 @@ public class GoogleDriveHelper {
     }
 
     // ============================================================
+    // CEK DRIVE SUDAH AKTIF
+    // ============================================================
+
+    public boolean isDriveReady() {
+
+        return driveService != null;
+    }
+
+    // ============================================================
     // SHUTDOWN
     // ============================================================
 
     public void shutdown() {
 
-        executor.shutdownNow();
+        try {
 
-        driveService = null;
+            executor.shutdownNow();
+
+        } catch (Exception ignored) {
+        }
+
+        driveService =
+                null;
 
         pendingAuthorizationCallback =
                 null;
