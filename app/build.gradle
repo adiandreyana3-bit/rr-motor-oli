@@ -7,7 +7,7 @@ android {
     compileSdk 35
 
     defaultConfig {
-        applicationId 'com.rrmotor.reminder'
+        applicationId 'com.rrmotor.reminder"
         minSdk 23
         targetSdk 35
         versionCode 1
@@ -17,7 +17,10 @@ android {
     buildTypes {
         release {
             minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
+
+            proguardFiles getDefaultProguardFile(
+                    'proguard-android-optimize.txt'
+            ),
                     'proguard-rules.pro'
         }
     }
@@ -33,19 +36,38 @@ dependencies {
     // AndroidX
     implementation 'androidx.appcompat:appcompat:1.7.0'
     implementation 'androidx.core:core:1.15.0'
+    implementation 'androidx.activity:activity:1.10.1'
+
+    // Material
     implementation 'com.google.android.material:material:1.12.0'
 
-    // Google Login - Credential Manager
+    // ============================================================
+    // GOOGLE LOGIN - CREDENTIAL MANAGER
+    // ============================================================
+
     implementation 'androidx.credentials:credentials:1.7.0-alpha03'
+
     implementation 'androidx.credentials:credentials-play-services-auth:1.7.0-alpha03'
-    implementation 'com.google.android.libraries.identity.googleid:googleid:1.2.1'
 
-    // Google Drive API
-    implementation 'com.google.apis:google-api-services-drive:v3-rev20240509-2.0.0'
+    implementation 'com.google.android.libraries.identity.googleid:googleid:1.1.1'
 
-    // Google API Client
-    implementation 'com.google.api-client:google-api-client-android:2.7.2'
+    // ============================================================
+    // GOOGLE IDENTITY / AUTHORIZATION
+    // ============================================================
 
-    // Gson untuk data JSON RR MOTOR
-    implementation 'com.google.code.gson:gson:2.11.0'
+    implementation 'com.google.android.gms:play-services-auth:21.4.0'
+
+    // ============================================================
+    // GOOGLE DRIVE API
+    // ============================================================
+
+    implementation 'com.google.api-client:google-api-client-android:2.8.1'
+
+    implementation 'com.google.apis:google-api-services-drive:v3-rev20250805-2.0.0'
+
+    // ============================================================
+    // GSON
+    // ============================================================
+
+    implementation 'com.google.code.gson:gson:2.13.2'
 }
