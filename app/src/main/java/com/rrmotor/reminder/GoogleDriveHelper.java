@@ -6,28 +6,25 @@ import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
 
-import com.google.android.gms.auth.api.identity.AuthorizationClient;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.IntentSenderRequest;
+
 import com.google.android.gms.auth.api.identity.AuthorizationRequest;
 import com.google.android.gms.auth.api.identity.AuthorizationResult;
 import com.google.android.gms.auth.api.identity.Identity;
+import com.google.android.gms.auth.api.identity.AuthorizationClient;
+import com.google.android.gms.common.api.ApiException;
 import com.google.android.gms.common.api.Scope;
-import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential;
-import com.google.api.client.http.AbstractInputStreamContent;
+import com.google.api.client.googleapis.extensions.android.gms.auth.UserRecoverableAuthIOException;
 import com.google.api.client.http.ByteArrayContent;
-import com.google.api.client.http.HttpRequest;
 import com.google.api.client.http.HttpRequestInitializer;
-import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
+import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.gson.GsonFactory;
 import com.google.api.services.drive.Drive;
 import com.google.api.services.drive.DriveScopes;
-import com.google.api.services.drive.model.File;
-import com.google.api.services.drive.model.FileList;
 
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
-import java.security.GeneralSecurityException;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -35,429 +32,413 @@ import java.util.concurrent.Executors;
 
 public class GoogleDriveHelper {
 
-    public static final int REQUEST_DRIVE_AUTH = 9001;
-
-    private static final String DRIVE_SCOPE =
-            DriveScopes.DRIVE_FILE;
-
     private static final String FILE_NAME =
             "RR_MOTOR_REMINDER.json";
 
     private static final String MIME_TYPE =
             "application/json";
 
-    private static final String PREF_NAME =
-            "RR_MOTOR_DRIVE";
-
-    private static final String KEY_FILE_ID =
-            "drive_file_id";
-
     private final Context context;
-
-    private final Handler mainHandler =
-            new Handler(Looper.getMainLooper());
 
     private final ExecutorService executor =
             Executors.newSingleThreadExecutor();
 
-    private AuthorizationClient authorizationClient;
+    private final Handler mainHandler =
+            new Handler(Looper.getMainLooper());
 
     private Drive driveService;
 
-    private String accessToken = "";
+    private DriveCallback pendingAuthorizationCallback;
 
     public GoogleDriveHelper(Context context) {
-
-        this.context =
-                context.getApplicationContext();
-
-        authorizationClient =
-                Identity.getAuthorizationClient(context);
+        this.context = context.getApplicationContext();
     }
 
     // ============================================================
-    // OTORISASI GOOGLE DRIVE
+    // CALLBACK
+    // ============================================================
+
+    public interface DriveCallback {
+
+        void onSuccess();
+
+        void onError(Exception e);
+    }
+
+    public interface DataCallback {
+
+        void onSuccess(String json);
+
+        void onError(Exception e);
+    }
+
+    // ============================================================
+    // AUTHORIZATION
     // ============================================================
 
     public void mintaIzinDrive(
             Activity activity,
-            DriveAuthorizationCallback callback) {
+            DriveCallback callback
+    ) {
 
-        Scope scope =
-                new Scope(DRIVE_SCOPE);
+        pendingAuthorizationCallback =
+                callback;
 
-        AuthorizationRequest request =
-                AuthorizationRequest.builder()
-                        .setRequestedScopes(
-                                Collections.singletonList(scope)
-                        )
-                        .build();
+        try {
 
-        authorizationClient
-                .authorize(request)
-                .addOnSuccessListener(result -> {
+            List<Scope> requestedScopes =
+                    Collections.singletonList(
+                            new Scope(
+                                    DriveScopes.DRIVE_FILE
+                            )
+                    );
 
-                    if (result.hasResolution()) {
+            AuthorizationRequest request =
+                    AuthorizationRequest
+                            .builder()
+                            .setRequestedScopes(
+                                    requestedScopes
+                            )
+                            .build();
 
-                        try {
+            AuthorizationClient client =
+                    Identity.getAuthorizationClient(
+                            activity
+                    );
 
-                            activity.startIntentSenderForResult(
-                                    result.getPendingIntent()
-                                            .getIntentSender(),
-                                    REQUEST_DRIVE_AUTH,
-                                    null,
-                                    0,
-                                    0,
-                                    0
-                            );
+            client.authorize(request)
+                    .addOnSuccessListener(
+                            activity,
+                            result -> {
 
-                            if (callback != null) {
-                                callback.onNeedUserConsent();
+                                if (result.hasResolution()) {
+
+                                    IntentSenderRequest senderRequest =
+                                            new IntentSenderRequest
+                                                    .Builder(
+                                                            result
+                                                                    .getPendingIntent()
+                                                                    .getIntentSender()
+                                                    )
+                                                    .build();
+
+                                    launchAuthorization(
+                                            activity,
+                                            senderRequest
+                                    );
+
+                                } else {
+
+                                    gunakanHasilAuthorization(
+                                            result
+                                    );
+                                }
                             }
+                    )
+                    .addOnFailureListener(
+                            activity,
+                            e -> {
 
-                        } catch (Exception e) {
+                                if (pendingAuthorizationCallback
+                                        != null) {
 
-                            if (callback != null) {
-                                callback.onError(
-                                        "Tidak dapat membuka izin Google Drive: "
-                                                + e.getMessage()
-                                );
+                                    pendingAuthorizationCallback
+                                            .onError(
+                                                    e
+                                            );
+
+                                    pendingAuthorizationCallback =
+                                            null;
+                                }
                             }
-                        }
+                    );
 
-                    } else {
+        } catch (Exception e) {
 
-                        prosesAuthorizationResult(
-                                result,
-                                callback
+            if (callback != null) {
+                callback.onError(e);
+            }
+        }
+    }
+
+    /*
+     * MainActivity harus memanggil metode ini melalui
+     * ActivityResultLauncher.
+     */
+    private void launchAuthorization(
+            Activity activity,
+            IntentSenderRequest request
+    ) {
+
+        if (activity instanceof MainActivity) {
+
+            ((MainActivity) activity)
+                    .launchDriveAuthorization(request);
+
+        } else {
+
+            if (pendingAuthorizationCallback != null) {
+
+                pendingAuthorizationCallback
+                        .onError(
+                                new Exception(
+                                        "Activity tidak mendukung authorization Google Drive."
+                                )
                         );
-                    }
 
-                })
-                .addOnFailureListener(e -> {
-
-                    if (callback != null) {
-                        callback.onError(
-                                "Gagal meminta izin Google Drive: "
-                                        + e.getMessage()
-                        );
-                    }
-                });
+                pendingAuthorizationCallback =
+                        null;
+            }
+        }
     }
 
     public void prosesHasilAuthorization(
             Activity activity,
-            int requestCode,
-            int resultCode,
-            Intent data,
-            DriveAuthorizationCallback callback) {
+            Intent data
+    ) {
 
-        if (requestCode != REQUEST_DRIVE_AUTH) {
-            return;
+        try {
+
+            AuthorizationResult result =
+                    Identity
+                            .getAuthorizationClient(
+                                    activity
+                            )
+                            .getAuthorizationResultFromIntent(
+                                    data
+                            );
+
+            gunakanHasilAuthorization(
+                    result
+            );
+
+        } catch (ApiException e) {
+
+            if (pendingAuthorizationCallback != null) {
+
+                pendingAuthorizationCallback
+                        .onError(e);
+
+                pendingAuthorizationCallback =
+                        null;
+            }
         }
-
-        mintaIzinDrive(
-                activity,
-                callback
-        );
     }
 
-    private void prosesAuthorizationResult(
-            AuthorizationResult result,
-            DriveAuthorizationCallback callback) {
+    private void gunakanHasilAuthorization(
+            AuthorizationResult result
+    ) {
 
-        String token =
-                result.getAccessToken();
+        try {
 
-        if (token == null ||
-                token.trim().isEmpty()) {
+            String accessToken =
+                    result.getAccessToken();
 
-            if (callback != null) {
-                callback.onError(
+            if (accessToken == null
+                    || accessToken.trim().isEmpty()) {
+
+                throw new Exception(
                         "Access token Google Drive kosong."
                 );
             }
 
-            return;
-        }
+            HttpRequestInitializer initializer =
+                    request -> {
 
-        accessToken = token;
+                        request.getHeaders()
+                                .setAuthorization(
+                                        "Bearer "
+                                                + accessToken
+                                );
+                    };
 
-        simpanAccessToken(token);
+            driveService =
+                    new Drive.Builder(
+                            new NetHttpTransport(),
+                            GsonFactory.getDefaultInstance(),
+                            initializer
+                    )
+                            .setApplicationName(
+                                    "RR MOTOR REMINDER"
+                            )
+                            .build();
 
-        buatDriveService(
-                token,
-                callback
-        );
-    }
+            if (pendingAuthorizationCallback
+                    != null) {
 
-    // ============================================================
-    // DRIVE SERVICE
-    // ============================================================
+                DriveCallback callback =
+                        pendingAuthorizationCallback;
 
-    private void buatDriveService(
-            String token,
-            DriveAuthorizationCallback callback) {
+                pendingAuthorizationCallback =
+                        null;
 
-        executor.execute(() -> {
-
-            try {
-
-                final Drive service =
-                        new Drive.Builder(
-                                GoogleNetHttpTransport.newTrustedTransport(),
-                                GsonFactory.getDefaultInstance(),
-                                request -> {
-
-                                    request.getHeaders()
-                                            .setAuthorization(
-                                                    "Bearer " + token
-                                            );
-                                }
-                        )
-                                .setApplicationName(
-                                        "RR MOTOR REMINDER"
-                                )
-                                .build();
-
-                driveService = service;
-
-                mainHandler.post(() -> {
-
-                    if (callback != null) {
-                        callback.onAuthorized();
-                    }
-                });
-
-            } catch (
-                    GeneralSecurityException |
-                    IOException e) {
-
-                mainHandler.post(() -> {
-
-                    if (callback != null) {
-                        callback.onError(
-                                "Gagal membuat koneksi Google Drive: "
-                                        + e.getMessage()
-                        );
-                    }
-                });
+                mainHandler.post(
+                        callback::onSuccess
+                );
             }
-        });
+
+        } catch (Exception e) {
+
+            if (pendingAuthorizationCallback != null) {
+
+                DriveCallback callback =
+                        pendingAuthorizationCallback;
+
+                pendingAuthorizationCallback =
+                        null;
+
+                mainHandler.post(
+                        () -> callback.onError(e)
+                );
+            }
+        }
     }
 
     // ============================================================
-    // BACKUP / UPLOAD
+    // UPLOAD
     // ============================================================
 
     public void uploadDatabase(
             String json,
-            DriveOperationCallback callback) {
+            DriveCallback callback
+    ) {
 
-        if (json == null) {
-            json = "[]";
+        if (driveService == null) {
+
+            callback.onError(
+                    new Exception(
+                            "Google Drive belum diotorisasi."
+                    )
+            );
+
+            return;
         }
-
-        final String finalJson = json;
 
         executor.execute(() -> {
 
             try {
 
-                Drive service =
-                        pastikanDriveService();
+                com.google.api.services.drive.model.File existing =
+                        cariFileDatabaseInternal();
 
-                if (service == null) {
-
-                    kirimError(
-                            callback,
-                            "Google Drive belum diotorisasi."
-                    );
-
-                    return;
-                }
-
-                String fileId =
-                        getSavedFileId();
-
-                if (fileId == null ||
-                        fileId.trim().isEmpty()) {
-
-                    fileId =
-                            cariFileDatabase(service);
-                }
-
-                byte[] bytes =
-                        finalJson.getBytes(
-                                StandardCharsets.UTF_8
-                        );
-
-                AbstractInputStreamContent media =
+                ByteArrayContent content =
                         new ByteArrayContent(
                                 MIME_TYPE,
-                                bytes
+                                json.getBytes(
+                                        java.nio.charset.StandardCharsets.UTF_8
+                                )
                         );
 
-                File metadata =
-                        new File();
+                if (existing == null) {
 
-                metadata.setName(
-                        FILE_NAME
-                );
+                    com.google.api.services.drive.model.File metadata =
+                            new com.google.api.services.drive.model.File();
 
-                if (fileId == null ||
-                        fileId.trim().isEmpty()) {
+                    metadata.setName(
+                            FILE_NAME
+                    );
 
-                    // ------------------------------------------------
-                    // FILE BELUM ADA → BUAT FILE BARU
-                    // ------------------------------------------------
+                    metadata.setMimeType(
+                            MIME_TYPE
+                    );
 
-                    File hasil =
-                            service.files()
-                                    .create(
-                                            metadata,
-                                            media
-                                    )
-                                    .setFields(
-                                            "id,name,mimeType,modifiedTime"
-                                    )
-                                    .execute();
-
-                    if (hasil != null &&
-                            hasil.getId() != null) {
-
-                        simpanFileId(
-                                hasil.getId()
-                        );
-
-                        kirimSukses(
-                                callback,
-                                "Backup berhasil disimpan ke Google Drive."
-                        );
-
-                    } else {
-
-                        kirimError(
-                                callback,
-                                "File Google Drive gagal dibuat."
-                        );
-                    }
+                    driveService
+                            .files()
+                            .create(
+                                    metadata,
+                                    content
+                            )
+                            .setFields(
+                                    "id,name"
+                            )
+                            .execute();
 
                 } else {
 
-                    // ------------------------------------------------
-                    // FILE SUDAH ADA → UPDATE FILE
-                    // ------------------------------------------------
-
-                    File hasil =
-                            service.files()
-                                    .update(
-                                            fileId,
-                                            metadata,
-                                            media
-                                    )
-                                    .setFields(
-                                            "id,name,mimeType,modifiedTime"
-                                    )
-                                    .execute();
-
-                    if (hasil != null) {
-
-                        simpanFileId(
-                                hasil.getId()
-                        );
-
-                        kirimSukses(
-                                callback,
-                                "Backup berhasil diperbarui."
-                        );
-
-                    } else {
-
-                        kirimError(
-                                callback,
-                                "Backup gagal diperbarui."
-                        );
-                    }
+                    driveService
+                            .files()
+                            .update(
+                                    existing.getId(),
+                                    null,
+                                    content
+                            )
+                            .setFields(
+                                    "id,name"
+                            )
+                            .execute();
                 }
+
+                mainHandler.post(
+                        callback::onSuccess
+                );
 
             } catch (Exception e) {
 
-                kirimError(
-                        callback,
-                        "Gagal backup Google Drive: "
-                                + e.getMessage()
+                mainHandler.post(
+                        () -> callback.onError(e)
                 );
             }
         });
     }
 
     // ============================================================
-    // RESTORE / DOWNLOAD
+    // DOWNLOAD
     // ============================================================
 
     public void downloadDatabase(
-            DriveDownloadCallback callback) {
+            DataCallback callback
+    ) {
+
+        if (driveService == null) {
+
+            callback.onError(
+                    new Exception(
+                            "Google Drive belum diotorisasi."
+                    )
+            );
+
+            return;
+        }
 
         executor.execute(() -> {
 
             try {
 
-                Drive service =
-                        pastikanDriveService();
+                com.google.api.services.drive.model.File file =
+                        cariFileDatabaseInternal();
 
-                if (service == null) {
+                if (file == null) {
 
-                    kirimDownloadError(
-                            callback,
-                            "Google Drive belum diotorisasi."
+                    mainHandler.post(
+                            () -> callback.onSuccess("")
                     );
 
                     return;
                 }
 
-                String fileId =
-                        getSavedFileId();
+                ByteArrayOutputStream output =
+                        new ByteArrayOutputStream();
 
-                if (fileId == null ||
-                        fileId.trim().isEmpty()) {
-
-                    fileId =
-                            cariFileDatabase(service);
-                }
-
-                if (fileId == null ||
-                        fileId.trim().isEmpty()) {
-
-                    kirimDownloadError(
-                            callback,
-                            "Backup RR MOTOR belum ditemukan di Google Drive."
-                    );
-
-                    return;
-                }
-
-                InputStream inputStream =
-                        service.files()
-                                .get(fileId)
-                                .executeMediaAsInputStream();
+                driveService
+                        .files()
+                        .get(file.getId())
+                        .executeMediaAndDownloadTo(
+                                output
+                        );
 
                 String json =
-                        bacaInputStream(inputStream);
+                        output.toString(
+                                java.nio.charset.StandardCharsets.UTF_8.name()
+                        );
 
-                simpanFileId(fileId);
-
-                kirimDownloadSukses(
-                        callback,
-                        json
+                mainHandler.post(
+                        () -> callback.onSuccess(json)
                 );
 
             } catch (Exception e) {
 
-                kirimDownloadError(
-                        callback,
-                        "Gagal restore Google Drive: "
-                                + e.getMessage()
+                mainHandler.post(
+                        () -> callback.onError(e)
                 );
             }
         });
@@ -467,325 +448,51 @@ public class GoogleDriveHelper {
     // CARI FILE
     // ============================================================
 
-    private String cariFileDatabase(
-            Drive service) throws IOException {
+    private com.google.api.services.drive.model.File
+    cariFileDatabaseInternal()
+            throws Exception {
 
         String query =
-                "name = '" +
-                        FILE_NAME +
-                        "' and trashed = false";
+                "name = '"
+                        + FILE_NAME
+                        + "'"
+                        + " and trashed = false";
 
-        FileList result =
-                service.files()
+        com.google.api.services.drive.model.FileList result =
+                driveService
+                        .files()
                         .list()
                         .setQ(query)
                         .setSpaces("drive")
                         .setFields(
-                                "files(id,name,mimeType,modifiedTime)"
+                                "files(id,name,mimeType)"
                         )
                         .setPageSize(10)
                         .execute();
 
-        List<File> files =
+        List<com.google.api.services.drive.model.File> files =
                 result.getFiles();
 
-        if (files == null ||
-                files.isEmpty()) {
+        if (files == null
+                || files.isEmpty()) {
 
             return null;
         }
 
-        /*
-         * Kalau ada beberapa file dengan nama sama,
-         * ambil file yang pertama.
-         */
-        File file =
-                files.get(0);
-
-        if (file == null) {
-            return null;
-        }
-
-        String id =
-                file.getId();
-
-        if (id != null) {
-            simpanFileId(id);
-        }
-
-        return id;
+        return files.get(0);
     }
 
     // ============================================================
-    // PASTIKAN SERVICE
+    // SHUTDOWN
     // ============================================================
-
-    private synchronized Drive pastikanDriveService()
-            throws Exception {
-
-        if (driveService != null) {
-            return driveService;
-        }
-
-        String token =
-                accessToken;
-
-        if (token == null ||
-                token.trim().isEmpty()) {
-
-            token =
-                    ambilAccessTokenLokal();
-        }
-
-        if (token == null ||
-                token.trim().isEmpty()) {
-
-            return null;
-        }
-
-        accessToken =
-                token;
-
-        driveService =
-                new Drive.Builder(
-                        GoogleNetHttpTransport.newTrustedTransport(),
-                        GsonFactory.getDefaultInstance(),
-                        request -> {
-
-                            request.getHeaders()
-                                    .setAuthorization(
-                                            "Bearer " + token
-                                    );
-                        }
-                )
-                        .setApplicationName(
-                                "RR MOTOR REMINDER"
-                        )
-                        .build();
-
-        return driveService;
-    }
-
-    // ============================================================
-    // TOKEN LOKAL
-    // ============================================================
-
-    private void simpanAccessToken(
-            String token) {
-
-        context.getSharedPreferences(
-                PREF_NAME,
-                Context.MODE_PRIVATE
-        )
-                .edit()
-                .putString(
-                        "access_token",
-                        token
-                )
-                .apply();
-    }
-
-    private String ambilAccessTokenLokal() {
-
-        return context
-                .getSharedPreferences(
-                        PREF_NAME,
-                        Context.MODE_PRIVATE
-                )
-                .getString(
-                        "access_token",
-                        ""
-                );
-    }
-
-    // ============================================================
-    // FILE ID
-    // ============================================================
-
-    private void simpanFileId(
-            String fileId) {
-
-        if (fileId == null) {
-            return;
-        }
-
-        context.getSharedPreferences(
-                PREF_NAME,
-                Context.MODE_PRIVATE
-        )
-                .edit()
-                .putString(
-                        KEY_FILE_ID,
-                        fileId
-                )
-                .apply();
-    }
-
-    private String getSavedFileId() {
-
-        return context
-                .getSharedPreferences(
-                        PREF_NAME,
-                        Context.MODE_PRIVATE
-                )
-                .getString(
-                        KEY_FILE_ID,
-                        ""
-                );
-    }
-
-    // ============================================================
-    // INPUT STREAM → STRING
-    // ============================================================
-
-    private String bacaInputStream(
-            InputStream inputStream)
-            throws IOException {
-
-        ByteArrayOutputStream output =
-                new ByteArrayOutputStream();
-
-        byte[] buffer =
-                new byte[8192];
-
-        int jumlah;
-
-        while ((jumlah =
-                inputStream.read(buffer)) != -1) {
-
-            output.write(
-                    buffer,
-                    0,
-                    jumlah
-            );
-        }
-
-        inputStream.close();
-
-        return output.toString(
-                StandardCharsets.UTF_8.name()
-        );
-    }
-
-    // ============================================================
-    // CALLBACK
-    // ============================================================
-
-    private void kirimSukses(
-            DriveOperationCallback callback,
-            String pesan) {
-
-        if (callback == null) {
-            return;
-        }
-
-        mainHandler.post(() ->
-                callback.onSuccess(pesan)
-        );
-    }
-
-    private void kirimError(
-            DriveOperationCallback callback,
-            String pesan) {
-
-        if (callback == null) {
-            return;
-        }
-
-        mainHandler.post(() ->
-                callback.onError(pesan)
-        );
-    }
-
-    private void kirimDownloadSukses(
-            DriveDownloadCallback callback,
-            String json) {
-
-        if (callback == null) {
-            return;
-        }
-
-        mainHandler.post(() ->
-                callback.onSuccess(json)
-        );
-    }
-
-    private void kirimDownloadError(
-            DriveDownloadCallback callback,
-            String pesan) {
-
-        if (callback == null) {
-            return;
-        }
-
-        mainHandler.post(() ->
-                callback.onError(pesan)
-        );
-    }
-
-    // ============================================================
-    // CEK STATUS
-    // ============================================================
-
-    public boolean sudahDiotorisasi() {
-
-        return accessToken != null &&
-                !accessToken.trim().isEmpty();
-    }
-
-    public boolean mempunyaiFileBackup() {
-
-        String fileId =
-                getSavedFileId();
-
-        return fileId != null &&
-                !fileId.trim().isEmpty();
-    }
-
-    public void hapusTokenLokal() {
-
-        accessToken = "";
-        driveService = null;
-
-        context.getSharedPreferences(
-                PREF_NAME,
-                Context.MODE_PRIVATE
-        )
-                .edit()
-                .remove("access_token")
-                .remove(KEY_FILE_ID)
-                .apply();
-    }
 
     public void shutdown() {
 
         executor.shutdownNow();
-    }
 
-    // ============================================================
-    // INTERFACE
-    // ============================================================
+        driveService = null;
 
-    public interface DriveAuthorizationCallback {
-
-        void onAuthorized();
-
-        void onNeedUserConsent();
-
-        void onError(String pesan);
-    }
-
-    public interface DriveOperationCallback {
-
-        void onSuccess(String pesan);
-
-        void onError(String pesan);
-    }
-
-    public interface DriveDownloadCallback {
-
-        void onSuccess(String json);
-
-        void onError(String pesan);
+        pendingAuthorizationCallback =
+                null;
     }
 }
