@@ -1,20 +1,15 @@
 package com.rrmotor.reminder;
 
-import android.app.Activity;
-import android.content.Intent;
+import android.content.Context;
 import android.os.Bundle;
-import android.os.CancellationSignal;
-import android.view.Gravity;
+import android.util.Base64;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.credentials.Credential;
 import androidx.credentials.CredentialManager;
-import androidx.credentials.CredentialManagerCallback;
 import androidx.credentials.GetCredentialRequest;
 import androidx.credentials.GetCredentialResponse;
 import androidx.credentials.exceptions.GetCredentialException;
@@ -23,242 +18,438 @@ import com.google.android.libraries.identity.googleid.GetGoogleIdOption;
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential;
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException;
 
-import java.util.concurrent.Executors;
+import java.security.SecureRandom;
 
 public class LoginActivity extends AppCompatActivity {
 
+    /*
+     * ============================================================
+     * GANTI DENGAN WEB CLIENT ID GOOGLE CLOUD
+     * ============================================================
+     *
+     * Contoh:
+     *
+     * 123456789012-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.apps.googleusercontent.com
+     *
+     * JANGAN gunakan Android Client ID.
+     */
+    private static final String WEB_CLIENT_ID =
+            "GANTI_DENGAN_WEB_CLIENT_ID_ANDA";
+
     private CredentialManager credentialManager;
 
-    private Button loginGoogleButton;
+    private TextView tvStatus;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        credentialManager = CredentialManager.create(this);
+        /*
+         * Kalau sebelumnya sudah login,
+         * langsung buka MainActivity.
+         */
+        if (isAlreadyLoggedIn()) {
+            bukaMainActivity();
+            return;
+        }
 
         buatTampilan();
+
+        credentialManager =
+                CredentialManager.create(this);
     }
+
+    // ============================================================
+    // TAMPILAN LOGIN
+    // ============================================================
 
     private void buatTampilan() {
 
-        LinearLayout utama = new LinearLayout(this);
-        utama.setOrientation(LinearLayout.VERTICAL);
-        utama.setGravity(Gravity.CENTER_HORIZONTAL);
-        utama.setPadding(40, 60, 40, 40);
+        LinearLayout root =
+                new LinearLayout(this);
 
-        TextView judul = new TextView(this);
-        judul.setText("🏍️ RR MOTOR");
-        judul.setTextSize(28);
-        judul.setGravity(Gravity.CENTER);
-        judul.setPadding(0, 0, 0, 10);
-
-        TextView subjudul = new TextView(this);
-        subjudul.setText("RR MOTOR REMINDER");
-        subjudul.setTextSize(18);
-        subjudul.setGravity(Gravity.CENTER);
-        subjudul.setPadding(0, 0, 0, 15);
-
-        TextView keterangan = new TextView(this);
-        keterangan.setText(
-                "Login menggunakan akun Google.\n\n" +
-                "Data reminder akan disimpan dan dicadangkan " +
-                "ke Google Drive."
+        root.setOrientation(
+                LinearLayout.VERTICAL
         );
-        keterangan.setTextSize(15);
-        keterangan.setGravity(Gravity.CENTER);
-        keterangan.setPadding(10, 10, 10, 30);
 
-        loginGoogleButton = new Button(this);
-        loginGoogleButton.setText("🔵 LOGIN DENGAN GOOGLE");
-        loginGoogleButton.setTextSize(16);
+        root.setPadding(
+                50,
+                80,
+                50,
+                50
+        );
 
-        loginGoogleButton.setOnClickListener(v -> loginDenganGoogle());
+        root.setGravity(
+                android.view.Gravity.CENTER
+        );
+
+        TextView title =
+                new TextView(this);
+
+        title.setText(
+                "🏍️ RR MOTOR"
+        );
+
+        title.setTextSize(30);
+
+        title.setTextColor(
+                android.graphics.Color.rgb(
+                        0,
+                        150,
+                        70
+                )
+        );
+
+        title.setGravity(
+                android.view.Gravity.CENTER
+        );
+
+        TextView subtitle =
+                new TextView(this);
+
+        subtitle.setText(
+                "REMINDER GANTI OLI"
+        );
+
+        subtitle.setTextSize(18);
+
+        subtitle.setGravity(
+                android.view.Gravity.CENTER
+        );
+
+        subtitle.setPadding(
+                0,
+                10,
+                0,
+                40
+        );
+
+        tvStatus =
+                new TextView(this);
+
+        tvStatus.setText(
+                "Silakan login dengan akun Google"
+        );
+
+        tvStatus.setTextSize(15);
+
+        tvStatus.setGravity(
+                android.view.Gravity.CENTER
+        );
+
+        tvStatus.setPadding(
+                0,
+                10,
+                0,
+                30
+        );
+
+        Button btnGoogle =
+                new Button(this);
+
+        btnGoogle.setText(
+                "🔐  LOGIN DENGAN GOOGLE"
+        );
+
+        btnGoogle.setTextSize(16);
+
+        btnGoogle.setTextColor(
+                android.graphics.Color.WHITE
+        );
+
+        btnGoogle.setBackgroundColor(
+                android.graphics.Color.rgb(
+                        0,
+                        150,
+                        70
+                )
+        );
+
+        btnGoogle.setAllCaps(false);
+
+        btnGoogle.setOnClickListener(
+                v -> loginGoogle()
+        );
+
+        root.addView(
+                title,
+                new LinearLayout.LayoutParams(
+                        -1,
+                        -2
+                )
+        );
+
+        root.addView(
+                subtitle,
+                new LinearLayout.LayoutParams(
+                        -1,
+                        -2
+                )
+        );
+
+        root.addView(
+                tvStatus,
+                new LinearLayout.LayoutParams(
+                        -1,
+                        -2
+                )
+        );
 
         LinearLayout.LayoutParams buttonParams =
                 new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT
+                        -1,
+                        60
                 );
 
-        buttonParams.setMargins(0, 20, 0, 10);
+        root.addView(
+                btnGoogle,
+                buttonParams
+        );
 
-        utama.addView(judul);
-        utama.addView(subjudul);
-        utama.addView(keterangan);
-        utama.addView(loginGoogleButton, buttonParams);
-
-        setContentView(utama);
+        setContentView(root);
     }
 
-    private void loginDenganGoogle() {
+    // ============================================================
+    // LOGIN GOOGLE
+    // ============================================================
 
-        loginGoogleButton.setEnabled(false);
+    private void loginGoogle() {
 
-        String serverClientId = getString(
-                R.string.default_web_client_id
+        if (WEB_CLIENT_ID.startsWith("GANTI_")) {
+
+            Toast.makeText(
+                    this,
+                    "Web Client ID Google belum diisi.",
+                    Toast.LENGTH_LONG
+            ).show();
+
+            tvStatus.setText(
+                    "Web Client ID Google belum diatur."
+            );
+
+            return;
+        }
+
+        tvStatus.setText(
+                "Memilih akun Google..."
         );
+
+        /*
+         * Google Login menggunakan Credential Manager.
+         *
+         * filter false:
+         * menampilkan akun Google yang tersedia.
+         */
 
         GetGoogleIdOption googleIdOption =
                 new GetGoogleIdOption.Builder()
-                        .setServerClientId(serverClientId)
                         .setFilterByAuthorizedAccounts(false)
+                        .setServerClientId(
+                                WEB_CLIENT_ID
+                        )
                         .setAutoSelectEnabled(false)
+                        .setNonce(
+                                buatNonce()
+                        )
                         .build();
 
         GetCredentialRequest request =
                 new GetCredentialRequest.Builder()
-                        .addCredentialOption(googleIdOption)
+                        .addCredentialOption(
+                                googleIdOption
+                        )
                         .build();
-
-        CancellationSignal cancellationSignal =
-                new CancellationSignal();
 
         credentialManager.getCredentialAsync(
                 this,
                 request,
-                cancellationSignal,
-                Executors.newSingleThreadExecutor(),
-                new CredentialManagerCallback<
+                null,
+                Runnable::run,
+                new androidx.credentials.CredentialManagerCallback<
                         GetCredentialResponse,
-                        GetCredentialException>() {
+                        GetCredentialException
+                        >() {
 
                     @Override
                     public void onResult(
-                            GetCredentialResponse result) {
+                            GetCredentialResponse result
+                    ) {
 
-                        runOnUiThread(() -> {
-
-                            try {
-
-                                Credential credential =
-                                        result.getCredential();
-
-                                if (credential == null) {
-                                    loginGagal(
-                                            "Data login Google tidak ditemukan."
-                                    );
-                                    return;
-                                }
-
-                                if (credential.getData() == null) {
-                                    loginGagal(
-                                            "Data akun Google tidak tersedia."
-                                    );
-                                    return;
-                                }
-
-                                GoogleIdTokenCredential googleCredential =
-                                        GoogleIdTokenCredential
-                                                .createFrom(
-                                                        credential.getData()
-                                                );
-
-                                String nama =
-                                        googleCredential.getDisplayName();
-
-                                String email =
-                                        googleCredential.getId();
-
-                                if (nama == null ||
-                                        nama.trim().isEmpty()) {
-                                    nama = "Pengguna Google";
-                                }
-
-                                if (email == null ||
-                                        email.trim().isEmpty()) {
-                                    email = "";
-                                }
-
-                                simpanLoginGoogle(
-                                        nama,
-                                        email
-                                );
-
-                            } catch (
-                                    GoogleIdTokenParsingException e) {
-
-                                loginGagal(
-                                        "Data akun Google tidak dapat dibaca."
-                                );
-                            } catch (Exception e) {
-
-                                loginGagal(
-                                        "Login Google gagal: "
-                                                + e.getMessage()
-                                );
-                            }
-                        });
+                        prosesLoginGoogle(
+                                result
+                        );
                     }
 
                     @Override
                     public void onError(
-                            @NonNull GetCredentialException e) {
+                            GetCredentialException e
+                    ) {
 
-                        runOnUiThread(() -> {
+                        runOnUiThread(
+                                () -> {
 
-                            loginGoogleButton.setEnabled(true);
+                                    tvStatus.setText(
+                                            "Login Google dibatalkan/gagal."
+                                    );
 
-                            Toast.makeText(
-                                    LoginActivity.this,
-                                    "Login Google dibatalkan atau gagal.",
-                                    Toast.LENGTH_LONG
-                            ).show();
-                        });
+                                    Toast.makeText(
+                                            LoginActivity.this,
+                                            "Login Google gagal: "
+                                                    + e.getMessage(),
+                                            Toast.LENGTH_LONG
+                                    ).show();
+                                }
+                        );
                     }
                 }
         );
     }
 
-    private void simpanLoginGoogle(
-            String nama,
-            String email) {
+    // ============================================================
+    // PROSES HASIL LOGIN
+    // ============================================================
 
-        getSharedPreferences(
+    private void prosesLoginGoogle(
+            GetCredentialResponse result
+    ) {
+
+        try {
+
+            androidx.credentials.Credential credential =
+                    result.getCredential();
+
+            GoogleIdTokenCredential googleCredential =
+                    GoogleIdTokenCredential
+                            .createFrom(
+                                    credential.getData()
+                            );
+
+            String nama =
+                    googleCredential.getDisplayName();
+
+            String email =
+                    googleCredential.getId();
+
+            /*
+             * Simpan status login lokal.
+             *
+             * Kita TIDAK menggunakan Firebase Auth.
+             */
+            getSharedPreferences(
+                    "RR_MOTOR_LOGIN",
+                    MODE_PRIVATE
+            )
+                    .edit()
+                    .putBoolean(
+                            "sudah_login",
+                            true
+                    )
+                    .putString(
+                            "nama",
+                            nama == null
+                                    ? ""
+                                    : nama
+                    )
+                    .putString(
+                            "email",
+                            email == null
+                                    ? ""
+                                    : email
+                    )
+                    .apply();
+
+            runOnUiThread(
+                    () -> {
+
+                        tvStatus.setText(
+                                "Login berhasil."
+                        );
+
+                        Toast.makeText(
+                                LoginActivity.this,
+                                "Login Google berhasil.",
+                                Toast.LENGTH_SHORT
+                        ).show();
+
+                        bukaMainActivity();
+                    }
+            );
+
+        } catch (
+                GoogleIdTokenParsingException e
+        ) {
+
+            runOnUiThread(
+                    () -> Toast.makeText(
+                            LoginActivity.this,
+                            "Data Login Google tidak dapat dibaca.",
+                            Toast.LENGTH_LONG
+                    ).show()
+            );
+
+        } catch (Exception e) {
+
+            runOnUiThread(
+                    () -> Toast.makeText(
+                            LoginActivity.this,
+                            "Login gagal: "
+                                    + e.getMessage(),
+                            Toast.LENGTH_LONG
+                    ).show()
+            );
+        }
+    }
+
+    // ============================================================
+    // CEK SUDAH LOGIN
+    // ============================================================
+
+    private boolean isAlreadyLoggedIn() {
+
+        return getSharedPreferences(
                 "RR_MOTOR_LOGIN",
                 MODE_PRIVATE
         )
-                .edit()
-                .putBoolean("sudah_login", true)
-                .putString("nama_google", nama)
-                .putString("email_google", email)
-                .apply();
-
-        Toast.makeText(
-                this,
-                "Login Google berhasil.",
-                Toast.LENGTH_SHORT
-        ).show();
-
-        bukaMainActivity();
+                .getBoolean(
+                        "sudah_login",
+                        false
+                );
     }
 
-    private void loginGagal(String pesan) {
-
-        loginGoogleButton.setEnabled(true);
-
-        Toast.makeText(
-                this,
-                pesan,
-                Toast.LENGTH_LONG
-        ).show();
-    }
+    // ============================================================
+    // BUKA MAIN ACTIVITY
+    // ============================================================
 
     private void bukaMainActivity() {
 
-        Intent intent =
-                new Intent(
-                        LoginActivity.this,
+        android.content.Intent intent =
+                new android.content.Intent(
+                        this,
                         MainActivity.class
                 );
 
-        intent.addFlags(
-                Intent.FLAG_ACTIVITY_CLEAR_TOP |
-                Intent.FLAG_ACTIVITY_NEW_TASK |
-                Intent.FLAG_ACTIVITY_CLEAR_TASK
-        );
-
         startActivity(intent);
+
         finish();
+    }
+
+    // ============================================================
+    // NONCE
+    // ============================================================
+
+    private String buatNonce() {
+
+        byte[] bytes =
+                new byte[32];
+
+        new SecureRandom()
+                .nextBytes(bytes);
+
+        return Base64.encodeToString(
+                bytes,
+                Base64.NO_WRAP
+                        | Base64.URL_SAFE
+                        | Base64.NO_PADDING
+        );
     }
 }
