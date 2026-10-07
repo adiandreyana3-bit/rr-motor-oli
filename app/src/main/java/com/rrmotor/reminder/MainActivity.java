@@ -13,13 +13,13 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.ContactsContract;
-import android.provider.Settings;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.*;
 
 import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.IntentSenderRequest;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
@@ -30,8 +30,6 @@ import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
-import java.util.Collections;
-import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -43,7 +41,6 @@ public class MainActivity extends AppCompatActivity {
     private static final String KEY_LOGGED_IN = "logged_in";
 
     private static final int REQ_CONTACT = 1001;
-    private static final int REQ_NOTIFICATION = 1002;
 
     private LocalDataStore localDataStore;
     private GoogleDriveHelper googleDriveHelper;
@@ -69,11 +66,54 @@ public class MainActivity extends AppCompatActivity {
     private final SimpleDateFormat tanggalFormat =
             new SimpleDateFormat("dd-MM-yyyy", Locale.getDefault());
 
-    private final ActivityResultLauncher<String> notificationPermissionLauncher =
+    // ============================================================
+    // GOOGLE DRIVE AUTHORIZATION
+    // ============================================================
+
+    private final ActivityResultLauncher<IntentSenderRequest>
+            driveAuthorizationLauncher =
+            registerForActivityResult(
+                    new ActivityResultContracts.StartIntentSenderForResult(),
+                    result -> {
+
+                        if (result.getResultCode() == RESULT_OK
+                                && result.getData() != null) {
+
+                            googleDriveHelper
+                                    .prosesHasilAuthorization(
+                                            this,
+                                            result.getData()
+                                    );
+
+                        } else {
+
+                            Toast.makeText(
+                                    this,
+                                    "Izin Google Drive dibatalkan.",
+                                    Toast.LENGTH_SHORT
+                            ).show();
+                        }
+                    }
+            );
+
+    public void launchDriveAuthorization(
+            IntentSenderRequest request
+    ) {
+        driveAuthorizationLauncher.launch(request);
+    }
+
+    // ============================================================
+    // NOTIFICATION PERMISSION
+    // ============================================================
+
+    private final ActivityResultLauncher<String>
+            notificationPermissionLauncher =
             registerForActivityResult(
                     new ActivityResultContracts.RequestPermission(),
                     granted -> {
+
                         if (!granted) {
+
                             Toast.makeText(
                                     this,
                                     "Izin notifikasi belum diberikan.",
@@ -83,28 +123,43 @@ public class MainActivity extends AppCompatActivity {
                     }
             );
 
-    private final ActivityResultLauncher<Intent> contactPickerLauncher =
+    // ============================================================
+    // CONTACT PICKER
+    // ============================================================
+
+    private final ActivityResultLauncher<Intent>
+            contactPickerLauncher =
             registerForActivityResult(
                     new ActivityResultContracts.StartActivityForResult(),
                     result -> {
+
                         if (result.getResultCode() == RESULT_OK
                                 && result.getData() != null
                                 && result.getData().getData() != null) {
 
-                            Uri contactUri = result.getData().getData();
-                            ambilDataKontak(contactUri);
+                            ambilDataKontak(
+                                    result.getData().getData()
+                            );
                         }
                     }
             );
+
+    // ============================================================
+    // ON CREATE
+    // ============================================================
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        localDataStore = new LocalDataStore(this);
-        googleDriveHelper = new GoogleDriveHelper(this);
+        localDataStore =
+                new LocalDataStore(this);
+
+        googleDriveHelper =
+                new GoogleDriveHelper(this);
 
         if (!isLoggedIn()) {
+
             bukaLogin();
             return;
         }
@@ -117,11 +172,19 @@ public class MainActivity extends AppCompatActivity {
 
         cekIzinAlarm();
 
-        // Kalau HP baru / aplikasi baru dan data lokal kosong,
-        // coba pulihkan data dari Google Drive.
+        /*
+         * Kalau data lokal kosong:
+         * coba restore dari Google Drive.
+         *
+         * Kalau data lokal sudah ada:
+         * langsung jadwalkan ulang reminder.
+         */
         if (localDataStore.size() == 0) {
+
             restoreDariGoogleDriveOtomatis();
+
         } else {
+
             jadwalkanSemuaReminder();
         }
     }
@@ -131,87 +194,191 @@ public class MainActivity extends AppCompatActivity {
     // ============================================================
 
     private boolean isLoggedIn() {
-        SharedPreferences pref =
-                getSharedPreferences(PREF_LOGIN, MODE_PRIVATE);
 
-        return pref.getBoolean(KEY_LOGGED_IN, false);
+        SharedPreferences pref =
+                getSharedPreferences(
+                        PREF_LOGIN,
+                        MODE_PRIVATE
+                );
+
+        return pref.getBoolean(
+                KEY_LOGGED_IN,
+                false
+        );
     }
 
     private void bukaLogin() {
-        Intent intent = new Intent(this, LoginActivity.class);
+
+        Intent intent =
+                new Intent(
+                        this,
+                        LoginActivity.class
+                );
+
         startActivity(intent);
+
         finish();
     }
 
     // ============================================================
-    // TAMPILAN
+    // BUAT TAMPILAN
     // ============================================================
 
     private void buatTampilan() {
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(12), dp(16), dp(20));
-        root.setBackgroundColor(0xFFF5F5F5);
+        LinearLayout root =
+                new LinearLayout(this);
 
-        ScrollView scrollView = new ScrollView(this);
+        root.setOrientation(
+                LinearLayout.VERTICAL
+        );
 
-        LinearLayout isi = new LinearLayout(this);
-        isi.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(
+                dp(16),
+                dp(12),
+                dp(16),
+                dp(20)
+        );
 
-        TextView title = new TextView(this);
-        title.setText("🏍️ RR MOTOR");
+        root.setBackgroundColor(
+                0xFFF5F5F5
+        );
+
+        ScrollView scrollView =
+                new ScrollView(this);
+
+        LinearLayout isi =
+                new LinearLayout(this);
+
+        isi.setOrientation(
+                LinearLayout.VERTICAL
+        );
+
+        // --------------------------------------------------------
+        // TITLE
+        // --------------------------------------------------------
+
+        TextView title =
+                new TextView(this);
+
+        title.setText(
+                "🏍️ RR MOTOR"
+        );
+
         title.setTextSize(28);
-        title.setGravity(Gravity.CENTER);
-        title.setTypeface(null, android.graphics.Typeface.BOLD);
-        title.setTextColor(0xFF087F23);
+
+        title.setGravity(
+                Gravity.CENTER
+        );
+
+        title.setTypeface(
+                null,
+                android.graphics.Typeface.BOLD
+        );
+
+        title.setTextColor(
+                0xFF087F23
+        );
 
         isi.addView(title);
 
-        TextView subtitle = new TextView(this);
-        subtitle.setText("REMINDER GANTI OLI");
+        // --------------------------------------------------------
+        // SUBTITLE
+        // --------------------------------------------------------
+
+        TextView subtitle =
+                new TextView(this);
+
+        subtitle.setText(
+                "REMINDER GANTI OLI"
+        );
+
         subtitle.setTextSize(16);
-        subtitle.setGravity(Gravity.CENTER);
-        subtitle.setTextColor(0xFF555555);
+
+        subtitle.setGravity(
+                Gravity.CENTER
+        );
+
+        subtitle.setTextColor(
+                0xFF555555
+        );
 
         isi.addView(subtitle);
 
-        isi.addView(jarak(12));
-
-        etNama = buatEditText(
-                "Nama pelanggan",
-                InputType.TYPE_CLASS_TEXT |
-                        InputType.TYPE_TEXT_FLAG_CAP_WORDS
+        isi.addView(
+                jarak(12)
         );
+
+        // --------------------------------------------------------
+        // NAMA
+        // --------------------------------------------------------
+
+        etNama =
+                buatEditText(
+                        "Nama pelanggan",
+                        InputType.TYPE_CLASS_TEXT
+                                | InputType.TYPE_TEXT_FLAG_CAP_WORDS
+                );
+
         isi.addView(etNama);
 
-        etNopol = buatEditText(
-                "Nopol / Plat nomor (opsional)",
-                InputType.TYPE_CLASS_TEXT |
-                        InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
-        );
+        // --------------------------------------------------------
+        // NOPOL
+        // --------------------------------------------------------
+
+        etNopol =
+                buatEditText(
+                        "Nopol / Plat nomor (opsional)",
+                        InputType.TYPE_CLASS_TEXT
+                                | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+                );
+
         isi.addView(etNopol);
 
-        etNomorMesin = buatEditText(
-                "Nomor mesin (opsional)",
-                InputType.TYPE_CLASS_TEXT
-        );
+        // --------------------------------------------------------
+        // NOMOR MESIN
+        // --------------------------------------------------------
+
+        etNomorMesin =
+                buatEditText(
+                        "Nomor mesin (opsional)",
+                        InputType.TYPE_CLASS_TEXT
+                );
+
         isi.addView(etNomorMesin);
 
-        etKm = buatEditText(
-                "KM terakhir (opsional)",
-                InputType.TYPE_CLASS_NUMBER
-        );
+        // --------------------------------------------------------
+        // KM
+        // --------------------------------------------------------
+
+        etKm =
+                buatEditText(
+                        "KM terakhir (opsional)",
+                        InputType.TYPE_CLASS_NUMBER
+                );
+
         isi.addView(etKm);
 
-        LinearLayout waRow = new LinearLayout(this);
-        waRow.setOrientation(LinearLayout.HORIZONTAL);
-        waRow.setGravity(Gravity.CENTER_VERTICAL);
+        // --------------------------------------------------------
+        // WHATSAPP + KONTAK
+        // --------------------------------------------------------
 
-        etWhatsapp = buatEditText(
-                "Nomor WhatsApp",
-                InputType.TYPE_CLASS_PHONE
+        LinearLayout waRow =
+                new LinearLayout(this);
+
+        waRow.setOrientation(
+                LinearLayout.HORIZONTAL
         );
+
+        waRow.setGravity(
+                Gravity.CENTER_VERTICAL
+        );
+
+        etWhatsapp =
+                buatEditText(
+                        "Nomor WhatsApp",
+                        InputType.TYPE_CLASS_PHONE
+                );
 
         LinearLayout.LayoutParams waParams =
                 new LinearLayout.LayoutParams(
@@ -220,29 +387,52 @@ public class MainActivity extends AppCompatActivity {
                         1
                 );
 
-        waRow.addView(etWhatsapp, waParams);
+        waRow.addView(
+                etWhatsapp,
+                waParams
+        );
 
-        Button btnKontak = new Button(this);
-        btnKontak.setText("📱 KONTAK");
-        btnKontak.setOnClickListener(v -> bukaKontak());
+        Button btnKontak =
+                new Button(this);
+
+        btnKontak.setText(
+                "📱 KONTAK"
+        );
+
+        btnKontak.setOnClickListener(
+                v -> bukaKontak()
+        );
 
         waRow.addView(btnKontak);
 
         isi.addView(waRow);
 
-        etTanggal = buatEditText(
-                "Tanggal input",
-                InputType.TYPE_CLASS_DATETIME
-        );
+        // --------------------------------------------------------
+        // TANGGAL
+        // --------------------------------------------------------
+
+        etTanggal =
+                buatEditText(
+                        "Tanggal input",
+                        InputType.TYPE_CLASS_DATETIME
+                );
 
         etTanggal.setFocusable(false);
+
         etTanggal.setClickable(true);
 
-        etTanggal.setOnClickListener(v -> pilihTanggal());
+        etTanggal.setOnClickListener(
+                v -> pilihTanggal()
+        );
 
         isi.addView(etTanggal);
 
-        spinnerBulan = new Spinner(this);
+        // --------------------------------------------------------
+        // SPINNER BULAN
+        // --------------------------------------------------------
+
+        spinnerBulan =
+                new Spinner(this);
 
         String[] pilihanBulan = {
                 "1 BULAN",
@@ -256,15 +446,31 @@ public class MainActivity extends AppCompatActivity {
                         pilihanBulan
                 );
 
-        spinnerBulan.setAdapter(adapter);
+        spinnerBulan.setAdapter(
+                adapter
+        );
 
-        isi.addView(spinnerBulan);
+        isi.addView(
+                spinnerBulan
+        );
 
-        isi.addView(jarak(8));
+        isi.addView(
+                jarak(8)
+        );
 
-        tvKmInfo = new TextView(this);
+        // --------------------------------------------------------
+        // INFO KM
+        // --------------------------------------------------------
+
+        tvKmInfo =
+                new TextView(this);
+
         tvKmInfo.setTextSize(14);
-        tvKmInfo.setTextColor(0xFF444444);
+
+        tvKmInfo.setTextColor(
+                0xFF444444
+        );
+
         tvKmInfo.setPadding(
                 dp(10),
                 dp(10),
@@ -272,77 +478,135 @@ public class MainActivity extends AppCompatActivity {
                 dp(10)
         );
 
-        isi.addView(tvKmInfo);
-
-        etKm.setOnFocusChangeListener((v, hasFocus) -> {
-            if (!hasFocus) {
-                tampilkanPerhitunganKm();
-            }
-        });
-
-        isi.addView(jarak(8));
-
-        btnSimpan = buatButton(
-                "💾 SIMPAN DATA",
-                0xFF087F23
+        isi.addView(
+                tvKmInfo
         );
 
-        btnSimpan.setOnClickListener(v -> simpanData());
+        etKm.setOnFocusChangeListener(
+                (v, hasFocus) -> {
 
-        isi.addView(btnSimpan);
+                    if (!hasFocus) {
 
-        btnDataBaru = buatButton(
-                "➕ DATA BARU",
-                0xFF087F23
+                        tampilkanPerhitunganKm();
+                    }
+                }
         );
 
-        btnDataBaru.setOnClickListener(v -> dataBaru());
-
-        isi.addView(btnDataBaru);
-
-        btnRiwayat = buatButton(
-                "📋 RIWAYAT REMINDER",
-                0xFF087F23
+        isi.addView(
+                jarak(8)
         );
 
-        btnRiwayat.setOnClickListener(v -> tampilkanRiwayat());
+        // --------------------------------------------------------
+        // SIMPAN
+        // --------------------------------------------------------
 
-        isi.addView(btnRiwayat);
+        btnSimpan =
+                buatButton(
+                        "💾 SIMPAN DATA",
+                        0xFF087F23
+                );
 
-        btnHapusRiwayat = buatButton(
-                "🗑️ HAPUS RIWAYAT TERKIRIM",
-                0xFF8B0000
+        btnSimpan.setOnClickListener(
+                v -> simpanData()
         );
+
+        isi.addView(
+                btnSimpan
+        );
+
+        // --------------------------------------------------------
+        // DATA BARU
+        // --------------------------------------------------------
+
+        btnDataBaru =
+                buatButton(
+                        "➕ DATA BARU",
+                        0xFF087F23
+                );
+
+        btnDataBaru.setOnClickListener(
+                v -> dataBaru()
+        );
+
+        isi.addView(
+                btnDataBaru
+        );
+
+        // --------------------------------------------------------
+        // RIWAYAT
+        // --------------------------------------------------------
+
+        btnRiwayat =
+                buatButton(
+                        "📋 RIWAYAT REMINDER",
+                        0xFF087F23
+                );
+
+        btnRiwayat.setOnClickListener(
+                v -> tampilkanRiwayat()
+        );
+
+        isi.addView(
+                btnRiwayat
+        );
+
+        // --------------------------------------------------------
+        // HAPUS RIWAYAT
+        // --------------------------------------------------------
+
+        btnHapusRiwayat =
+                buatButton(
+                        "🗑️ HAPUS RIWAYAT TERKIRIM",
+                        0xFF8B0000
+                );
 
         btnHapusRiwayat.setOnClickListener(
                 v -> konfirmasiHapusRiwayat()
         );
 
-        isi.addView(btnHapusRiwayat);
-
-        btnBackup = buatButton(
-                "☁️ BACKUP KE GOOGLE DRIVE",
-                0xFF087F23
+        isi.addView(
+                btnHapusRiwayat
         );
+
+        // --------------------------------------------------------
+        // BACKUP
+        // --------------------------------------------------------
+
+        btnBackup =
+                buatButton(
+                        "☁️ BACKUP KE GOOGLE DRIVE",
+                        0xFF087F23
+                );
 
         btnBackup.setOnClickListener(
                 v -> backupKeGoogleDrive()
         );
 
-        isi.addView(btnBackup);
-
-        btnRestore = buatButton(
-                "♻️ RESTORE DARI GOOGLE DRIVE",
-                0xFF087F23
+        isi.addView(
+                btnBackup
         );
+
+        // --------------------------------------------------------
+        // RESTORE
+        // --------------------------------------------------------
+
+        btnRestore =
+                buatButton(
+                        "♻️ RESTORE DARI GOOGLE DRIVE",
+                        0xFF087F23
+                );
 
         btnRestore.setOnClickListener(
                 v -> konfirmasiRestore()
         );
 
-        isi.addView(btnRestore);
+        isi.addView(
+                btnRestore
+        );
 
-        scrollView.addView(isi);
+        scrollView.addView(
+                isi
+        );
 
         root.addView(
                 scrollView,
@@ -357,20 +621,31 @@ public class MainActivity extends AppCompatActivity {
 
         isiTanggalHariIni();
 
-        btnDataBaru.setVisibility(View.VISIBLE);
+        btnSimpan.setEnabled(true);
     }
+
+    // ============================================================
+    // EDIT TEXT
+    // ============================================================
 
     private EditText buatEditText(
             String hint,
             int inputType
     ) {
 
-        EditText editText = new EditText(this);
+        EditText editText =
+                new EditText(this);
 
         editText.setHint(hint);
+
         editText.setTextSize(16);
+
         editText.setSingleLine(true);
-        editText.setInputType(inputType);
+
+        editText.setInputType(
+                inputType
+        );
+
         editText.setPadding(
                 dp(12),
                 dp(10),
@@ -384,24 +659,43 @@ public class MainActivity extends AppCompatActivity {
                         LinearLayout.LayoutParams.WRAP_CONTENT
                 );
 
-        params.setMargins(0, dp(4), 0, dp(4));
+        params.setMargins(
+                0,
+                dp(4),
+                0,
+                dp(4)
+        );
 
-        editText.setLayoutParams(params);
+        editText.setLayoutParams(
+                params
+        );
 
         return editText;
     }
+
+    // ============================================================
+    // BUTTON
+    // ============================================================
 
     private Button buatButton(
             String text,
             int color
     ) {
 
-        Button button = new Button(this);
+        Button button =
+                new Button(this);
 
         button.setText(text);
+
         button.setTextSize(14);
-        button.setTextColor(0xFFFFFFFF);
-        button.setBackgroundColor(color);
+
+        button.setTextColor(
+                0xFFFFFFFF
+        );
+
+        button.setBackgroundColor(
+                color
+        );
 
         LinearLayout.LayoutParams params =
                 new LinearLayout.LayoutParams(
@@ -416,26 +710,42 @@ public class MainActivity extends AppCompatActivity {
                 dp(5)
         );
 
-        button.setLayoutParams(params);
+        button.setLayoutParams(
+                params
+        );
 
         return button;
     }
 
-    private TextView jarak(int dp) {
-        TextView view = new TextView(this);
+    // ============================================================
+    // JARAK
+    // ============================================================
 
-        view.setHeight(dp(dp));
+    private TextView jarak(
+            int ukuran
+    ) {
+
+        TextView view =
+                new TextView(this);
+
+        view.setHeight(
+                dp(ukuran)
+        );
 
         return view;
     }
 
-    private int dp(int value) {
-        return (int) (
-                value *
-                        getResources()
+    private int dp(
+            int value
+    ) {
+
+        return (int)
+                (
+                        value
+                                * getResources()
                                 .getDisplayMetrics()
                                 .density
-        );
+                );
     }
 
     // ============================================================
@@ -445,22 +755,31 @@ public class MainActivity extends AppCompatActivity {
     private void isiTanggalHariIni() {
 
         etTanggal.setText(
-                tanggalFormat.format(new Date())
+                tanggalFormat.format(
+                        new Date()
+                )
         );
     }
 
     private void pilihTanggal() {
 
-        Calendar calendar = Calendar.getInstance();
+        Calendar calendar =
+                Calendar.getInstance();
 
         try {
+
             Date date =
                     tanggalFormat.parse(
-                            etTanggal.getText().toString()
+                            etTanggal
+                                    .getText()
+                                    .toString()
                     );
 
             if (date != null) {
-                calendar.setTime(date);
+
+                calendar.setTime(
+                        date
+                );
             }
 
         } catch (Exception ignored) {
@@ -486,9 +805,15 @@ public class MainActivity extends AppCompatActivity {
                                     )
                             );
                         },
-                        calendar.get(Calendar.YEAR),
-                        calendar.get(Calendar.MONTH),
-                        calendar.get(Calendar.DAY_OF_MONTH)
+                        calendar.get(
+                                Calendar.YEAR
+                        ),
+                        calendar.get(
+                                Calendar.MONTH
+                        ),
+                        calendar.get(
+                                Calendar.DAY_OF_MONTH
+                        )
                 );
 
         dialog.show();
@@ -501,17 +826,23 @@ public class MainActivity extends AppCompatActivity {
     private void tampilkanPerhitunganKm() {
 
         String kmText =
-                etKm.getText().toString().trim();
+                etKm.getText()
+                        .toString()
+                        .trim();
 
         if (kmText.isEmpty()) {
+
             tvKmInfo.setText("");
+
             return;
         }
 
         try {
 
             long km =
-                    Long.parseLong(kmText);
+                    Long.parseLong(
+                            kmText
+                    );
 
             long maksimal =
                     km + 1500;
@@ -520,13 +851,13 @@ public class MainActivity extends AppCompatActivity {
                     km + 2000;
 
             tvKmInfo.setText(
-                    "🔧 PERKIRAAN GANTI OLI\n\n" +
-                    "Maksimal ganti oli : " +
-                    maksimal +
-                    " KM\n" +
-                    "Paling lambat       : " +
-                    palingLambat +
-                    " KM"
+                    "🔧 PERKIRAAN GANTI OLI\n\n"
+                            + "Maksimal ganti oli : "
+                            + maksimal
+                            + " KM\n"
+                            + "Paling lambat : "
+                            + palingLambat
+                            + " KM"
             );
 
         } catch (Exception e) {
@@ -553,7 +884,7 @@ public class MainActivity extends AppCompatActivity {
                     new String[]{
                             Manifest.permission.READ_CONTACTS
                     },
-                    REQ_CONTACT
+                    1001
             );
 
             return;
@@ -562,51 +893,80 @@ public class MainActivity extends AppCompatActivity {
         Intent intent =
                 new Intent(
                         Intent.ACTION_PICK,
-                        ContactsContract.CommonDataKinds.Phone.CONTENT_URI
+                        ContactsContract
+                                .CommonDataKinds
+                                .Phone
+                                .CONTENT_URI
                 );
 
-        contactPickerLauncher.launch(intent);
+        contactPickerLauncher.launch(
+                intent
+        );
     }
 
-    private void ambilDataKontak(Uri contactUri) {
+    private void ambilDataKontak(
+            Uri contactUri
+    ) {
 
         Cursor cursor = null;
 
         try {
 
-            cursor = getContentResolver().query(
-                    contactUri,
-                    new String[]{
-                            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-                            ContactsContract.CommonDataKinds.Phone.NUMBER
-                    },
-                    null,
-                    null,
-                    null
-            );
+            cursor =
+                    getContentResolver()
+                            .query(
+                                    contactUri,
+                                    new String[]{
+                                            ContactsContract
+                                                    .CommonDataKinds
+                                                    .Phone
+                                                    .DISPLAY_NAME,
 
-            if (cursor != null && cursor.moveToFirst()) {
+                                            ContactsContract
+                                                    .CommonDataKinds
+                                                    .Phone
+                                                    .NUMBER
+                                    },
+                                    null,
+                                    null,
+                                    null
+                            );
+
+            if (cursor != null
+                    && cursor.moveToFirst()) {
 
                 int namaIndex =
                         cursor.getColumnIndex(
-                                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME
+                                ContactsContract
+                                        .CommonDataKinds
+                                        .Phone
+                                        .DISPLAY_NAME
                         );
 
                 int nomorIndex =
                         cursor.getColumnIndex(
-                                ContactsContract.CommonDataKinds.Phone.NUMBER
+                                ContactsContract
+                                        .CommonDataKinds
+                                        .Phone
+                                        .NUMBER
                         );
 
                 if (namaIndex >= 0) {
+
                     etNama.setText(
-                            cursor.getString(namaIndex)
+                            cursor.getString(
+                                    namaIndex
+                            )
                     );
                 }
 
                 if (nomorIndex >= 0) {
+
                     etWhatsapp.setText(
                             bersihkanNomor(
-                                    cursor.getString(nomorIndex)
+                                    cursor.getString(
+                                            nomorIndex
+                                    )
                             )
                     );
                 }
@@ -623,58 +983,84 @@ public class MainActivity extends AppCompatActivity {
         } finally {
 
             if (cursor != null) {
+
                 cursor.close();
             }
         }
     }
 
-    private String bersihkanNomor(String nomor) {
+    private String bersihkanNomor(
+            String nomor
+    ) {
 
         if (nomor == null) {
+
             return "";
         }
 
-        nomor = nomor.replaceAll(
-                "[^0-9+]",
-                ""
-        );
+        nomor =
+                nomor.replaceAll(
+                        "[^0-9+]",
+                        ""
+                );
 
         if (nomor.startsWith("+62")) {
-            nomor = "0" + nomor.substring(3);
+
+            nomor =
+                    "0"
+                            + nomor.substring(3);
         }
 
         if (nomor.startsWith("62")) {
-            nomor = "0" + nomor.substring(2);
+
+            nomor =
+                    "0"
+                            + nomor.substring(2);
         }
 
         return nomor;
     }
 
     // ============================================================
-    // SIMPAN
+    // SIMPAN DATA
     // ============================================================
 
     private void simpanData() {
 
         String nama =
-                etNama.getText().toString().trim();
+                etNama.getText()
+                        .toString()
+                        .trim();
 
         String nopol =
-                etNopol.getText().toString().trim();
+                etNopol.getText()
+                        .toString()
+                        .trim();
 
         String nomorMesin =
-                etNomorMesin.getText().toString().trim();
+                etNomorMesin
+                        .getText()
+                        .toString()
+                        .trim();
 
         String km =
-                etKm.getText().toString().trim();
+                etKm.getText()
+                        .toString()
+                        .trim();
 
         String whatsapp =
                 bersihkanNomor(
-                        etWhatsapp.getText().toString().trim()
+                        etWhatsapp
+                                .getText()
+                                .toString()
+                                .trim()
                 );
 
         String tanggalInput =
-                etTanggal.getText().toString().trim();
+                etTanggal
+                        .getText()
+                        .toString()
+                        .trim();
 
         if (whatsapp.isEmpty()) {
 
@@ -721,18 +1107,23 @@ public class MainActivity extends AppCompatActivity {
         }
 
         if (tanggal == null) {
+
             return;
         }
 
         int bulan =
-                spinnerBulan.getSelectedItemPosition() == 0
+                spinnerBulan
+                        .getSelectedItemPosition()
+                        == 0
                         ? 1
                         : 2;
 
         Calendar jatuhTempo =
                 Calendar.getInstance();
 
-        jatuhTempo.setTime(tanggal);
+        jatuhTempo.setTime(
+                tanggal
+        );
 
         jatuhTempo.add(
                 Calendar.MONTH,
@@ -759,7 +1150,8 @@ public class MainActivity extends AppCompatActivity {
                 );
 
         String id =
-                UUID.randomUUID().toString();
+                UUID.randomUUID()
+                        .toString();
 
         ReminderData data =
                 new ReminderData(
@@ -779,7 +1171,9 @@ public class MainActivity extends AppCompatActivity {
                 );
 
         boolean berhasil =
-                localDataStore.add(data);
+                localDataStore.add(
+                        data
+                );
 
         if (!berhasil) {
 
@@ -792,9 +1186,13 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        jadwalkanReminder(data);
+        jadwalkanReminder(
+                data
+        );
 
-        btnSimpan.setEnabled(false);
+        btnSimpan.setEnabled(
+                false
+        );
 
         Toast.makeText(
                 this,
@@ -807,7 +1205,13 @@ public class MainActivity extends AppCompatActivity {
         backupKeGoogleDriveOtomatis();
     }
 
-    private long setJam09(Calendar calendar) {
+    // ============================================================
+    // JAM REMINDER
+    // ============================================================
+
+    private long setJam09(
+            Calendar calendar
+    ) {
 
         Calendar waktu =
                 (Calendar) calendar.clone();
@@ -835,6 +1239,10 @@ public class MainActivity extends AppCompatActivity {
         return waktu.getTimeInMillis();
     }
 
+    // ============================================================
+    // PESAN WHATSAPP
+    // ============================================================
+
     private String buatPesanWhatsApp(
             String nama,
             String nopol,
@@ -861,6 +1269,7 @@ public class MainActivity extends AppCompatActivity {
                             + nama
                             + ",\n\n"
             );
+
         } else {
 
             pesan.append(
@@ -902,7 +1311,9 @@ public class MainActivity extends AppCompatActivity {
             try {
 
                 long nilaiKm =
-                        Long.parseLong(km);
+                        Long.parseLong(
+                                km
+                        );
 
                 pesan.append(
                         "Maksimal ganti oli: "
@@ -937,7 +1348,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ============================================================
-    // ALARM
+    // JADWALKAN REMINDER
     // ============================================================
 
     private void jadwalkanReminder(
@@ -951,6 +1362,7 @@ public class MainActivity extends AppCompatActivity {
                         );
 
         if (alarmManager == null) {
+
             return;
         }
 
@@ -981,7 +1393,8 @@ public class MainActivity extends AppCompatActivity {
         );
 
         int requestCode =
-                data.getId().hashCode();
+                data.getId()
+                        .hashCode();
 
         PendingIntent pendingIntent =
                 PendingIntent.getBroadcast(
@@ -995,44 +1408,48 @@ public class MainActivity extends AppCompatActivity {
         long waktu =
                 data.getWaktuReminder();
 
-        if (waktu <= System.currentTimeMillis()) {
+        if (waktu <=
+                System.currentTimeMillis()) {
+
             return;
         }
 
         try {
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (Build.VERSION.SDK_INT >=
+                    Build.VERSION_CODES.S) {
 
-                if (alarmManager.canScheduleExactAlarms()) {
+                if (alarmManager
+                        .canScheduleExactAlarms()) {
 
-                    alarmManager.setExactAndAllowWhileIdle(
-                            AlarmManager.RTC_WAKEUP,
-                            waktu,
-                            pendingIntent
-                    );
+                    alarmManager
+                            .setExactAndAllowWhileIdle(
+                                    AlarmManager.RTC_WAKEUP,
+                                    waktu,
+                                    pendingIntent
+                            );
 
                 } else {
 
-                    alarmManager.setAndAllowWhileIdle(
-                            AlarmManager.RTC_WAKEUP,
-                            waktu,
-                            pendingIntent
-                    );
-
-                    Toast.makeText(
-                            this,
-                            "Aktifkan izin Alarm & pengingat agar reminder lebih tepat jam 09:00.",
-                            Toast.LENGTH_LONG
-                    ).show();
+                    alarmManager
+                            .setAndAllowWhileIdle(
+                                    AlarmManager.RTC_WAKEUP,
+                                    waktu,
+                                    pendingIntent
+                            );
                 }
 
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            } else if (
+                    Build.VERSION.SDK_INT >=
+                            Build.VERSION_CODES.M
+            ) {
 
-                alarmManager.setExactAndAllowWhileIdle(
-                        AlarmManager.RTC_WAKEUP,
-                        waktu,
-                        pendingIntent
-                );
+                alarmManager
+                        .setExactAndAllowWhileIdle(
+                                AlarmManager.RTC_WAKEUP,
+                                waktu,
+                                pendingIntent
+                        );
 
             } else {
 
@@ -1045,25 +1462,33 @@ public class MainActivity extends AppCompatActivity {
 
         } catch (SecurityException e) {
 
-            alarmManager.setAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    waktu,
-                    pendingIntent
-            );
+            alarmManager
+                    .setAndAllowWhileIdle(
+                            AlarmManager.RTC_WAKEUP,
+                            waktu,
+                            pendingIntent
+                    );
         }
     }
+
+    // ============================================================
+    // JADWALKAN SEMUA REMINDER
+    // ============================================================
 
     private void jadwalkanSemuaReminder() {
 
         List<ReminderData> semua =
-                localDataStore.getUnsent();
+                localDataStore
+                        .getUnsent();
 
         for (ReminderData data : semua) {
 
             if (data.getWaktuReminder()
                     > System.currentTimeMillis()) {
 
-                jadwalkanReminder(data);
+                jadwalkanReminder(
+                        data
+                );
 
             } else {
 
@@ -1093,10 +1518,16 @@ public class MainActivity extends AppCompatActivity {
                         data.getPesanWhatsApp()
                 );
 
-                sendBroadcast(intent);
+                sendBroadcast(
+                        intent
+                );
             }
         }
     }
+
+    // ============================================================
+    // BATALKAN ALARM
+    // ============================================================
 
     private void batalkanReminder(
             ReminderData data
@@ -1109,6 +1540,7 @@ public class MainActivity extends AppCompatActivity {
                         );
 
         if (alarmManager == null) {
+
             return;
         }
 
@@ -1121,7 +1553,8 @@ public class MainActivity extends AppCompatActivity {
         PendingIntent pendingIntent =
                 PendingIntent.getBroadcast(
                         this,
-                        data.getId().hashCode(),
+                        data.getId()
+                                .hashCode(),
                         intent,
                         PendingIntent.FLAG_UPDATE_CURRENT
                                 | PendingIntent.FLAG_IMMUTABLE
@@ -1133,12 +1566,13 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ============================================================
-    // IZIN ALARM
+    // CEK IZIN ALARM
     // ============================================================
 
     private void cekIzinAlarm() {
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (Build.VERSION.SDK_INT >=
+                Build.VERSION_CODES.S) {
 
             AlarmManager alarmManager =
                     (AlarmManager)
@@ -1147,10 +1581,10 @@ public class MainActivity extends AppCompatActivity {
                             );
 
             if (alarmManager != null
-                    && !alarmManager.canScheduleExactAlarms()) {
+                    && !alarmManager
+                    .canScheduleExactAlarms()) {
 
-                // Tidak langsung memaksa.
-                // Alarm tetap memakai fallback.
+                // Fallback tetap digunakan.
             }
         }
     }
@@ -1168,18 +1602,22 @@ public class MainActivity extends AppCompatActivity {
                     Manifest.permission.POST_NOTIFICATIONS
             ) != PackageManager.PERMISSION_GRANTED) {
 
-                notificationPermissionLauncher.launch(
-                        Manifest.permission.POST_NOTIFICATIONS
-                );
+                notificationPermissionLauncher
+                        .launch(
+                                Manifest.permission
+                                        .POST_NOTIFICATIONS
+                        );
             }
         }
     }
 
     private void prosesIntentNotifikasi() {
 
-        Intent intent = getIntent();
+        Intent intent =
+                getIntent();
 
         if (intent == null) {
+
             return;
         }
 
@@ -1190,6 +1628,7 @@ public class MainActivity extends AppCompatActivity {
                 );
 
         if (!dariNotifikasi) {
+
             return;
         }
 
@@ -1203,22 +1642,29 @@ public class MainActivity extends AppCompatActivity {
                         "reminder_pesan"
                 );
 
-        if (wa == null || wa.trim().isEmpty()) {
+        if (wa == null
+                || wa.trim().isEmpty()) {
+
             return;
         }
 
-        new android.os.Handler().postDelayed(
-                () -> bukaWhatsApp(
-                        wa,
-                        pesan
-                ),
-                700
-        );
+        new android.os.Handler()
+                .postDelayed(
+                        () -> bukaWhatsApp(
+                                wa,
+                                pesan
+                        ),
+                        700
+                );
 
         intent.removeExtra(
                 "reminder_dari_notifikasi"
         );
     }
+
+    // ============================================================
+    // BUKA WHATSAPP
+    // ============================================================
 
     private void bukaWhatsApp(
             String nomor,
@@ -1228,10 +1674,31 @@ public class MainActivity extends AppCompatActivity {
         try {
 
             String nomorBersih =
-                    bersihkanNomor(nomor);
+                    bersihkanNomor(
+                            nomor
+                    );
+
+            if (nomorBersih
+                    .startsWith("0")) {
+
+                nomorBersih =
+                        "62"
+                                + nomorBersih.substring(1);
+
+            } else if (
+                    nomorBersih.startsWith("+62")
+            ) {
+
+                nomorBersih =
+                        nomorBersih.substring(1);
+            }
 
             String encoded =
-                    Uri.encode(pesan == null ? "" : pesan);
+                    Uri.encode(
+                            pesan == null
+                                    ? ""
+                                    : pesan
+                    );
 
             Intent intent =
                     new Intent(
@@ -1241,21 +1708,15 @@ public class MainActivity extends AppCompatActivity {
             intent.setData(
                     Uri.parse(
                             "https://wa.me/"
-                                    + nomorBersih.substring(
-                                            nomorBersih.startsWith("0")
-                                                    ? 1
-                                                    : 0
-                                    )
-                                    .replaceFirst(
-                                            "^",
-                                            "62"
-                                    )
+                                    + nomorBersih
                                     + "?text="
                                     + encoded
                     )
             );
 
-            startActivity(intent);
+            startActivity(
+                    intent
+            );
 
         } catch (Exception e) {
 
@@ -1274,18 +1735,26 @@ public class MainActivity extends AppCompatActivity {
     private void dataBaru() {
 
         etNama.setText("");
+
         etNopol.setText("");
+
         etNomorMesin.setText("");
+
         etKm.setText("");
+
         etWhatsapp.setText("");
 
         isiTanggalHariIni();
 
-        spinnerBulan.setSelection(0);
+        spinnerBulan.setSelection(
+                0
+        );
 
         tvKmInfo.setText("");
 
-        btnSimpan.setEnabled(true);
+        btnSimpan.setEnabled(
+                true
+        );
 
         etNama.requestFocus();
     }
@@ -1303,20 +1772,27 @@ public class MainActivity extends AppCompatActivity {
         };
 
         new AlertDialog.Builder(this)
-                .setTitle("📋 RIWAYAT REMINDER")
+                .setTitle(
+                        "📋 RIWAYAT REMINDER"
+                )
                 .setItems(
                         filter,
                         (dialog, which) -> {
 
                             if (which == 0) {
+
                                 tampilkanDaftarRiwayat(
                                         "SEMUA"
                                 );
+
                             } else if (which == 1) {
+
                                 tampilkanDaftarRiwayat(
                                         "BELUM TERKIRIM"
                                 );
+
                             } else {
+
                                 tampilkanDaftarRiwayat(
                                         "TERKIRIM"
                                 );
@@ -1331,7 +1807,8 @@ public class MainActivity extends AppCompatActivity {
     ) {
 
         List<ReminderData> data =
-                localDataStore.getSortedByNewest();
+                localDataStore
+                        .getSortedByNewest();
 
         List<ReminderData> tampil =
                 new ArrayList<>();
@@ -1340,21 +1817,29 @@ public class MainActivity extends AppCompatActivity {
 
             if (jenis.equals("SEMUA")) {
 
-                tampil.add(item);
+                tampil.add(
+                        item
+                );
 
             } else if (
                     jenis.equals("TERKIRIM")
-                            && item.isReminderTerkirim()
+                            && item
+                            .isReminderTerkirim()
             ) {
 
-                tampil.add(item);
+                tampil.add(
+                        item
+                );
 
             } else if (
                     jenis.equals("BELUM TERKIRIM")
-                            && !item.isReminderTerkirim()
+                            && !item
+                            .isReminderTerkirim()
             ) {
 
-                tampil.add(item);
+                tampil.add(
+                        item
+                );
             }
         }
 
@@ -1370,9 +1855,13 @@ public class MainActivity extends AppCompatActivity {
         }
 
         String[] daftar =
-                new String[tampil.size()];
+                new String[
+                        tampil.size()
+                ];
 
-        for (int i = 0; i < tampil.size(); i++) {
+        for (int i = 0;
+             i < tampil.size();
+             i++) {
 
             ReminderData item =
                     tampil.get(i);
@@ -1388,7 +1877,8 @@ public class MainActivity extends AppCompatActivity {
             if (nama == null
                     || nama.trim().isEmpty()) {
 
-                nama = "(Tanpa nama)";
+                nama =
+                        "(Tanpa nama)";
             }
 
             String nopol =
@@ -1397,10 +1887,12 @@ public class MainActivity extends AppCompatActivity {
             if (nopol == null
                     || nopol.trim().isEmpty()) {
 
-                nopol = "-";
+                nopol =
+                        "-";
             }
 
-            String lewat = "";
+            String lewat =
+                    "";
 
             if (!item.isReminderTerkirim()
                     && item.getWaktuReminder()
@@ -1438,6 +1930,10 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
+    // ============================================================
+    // DETAIL RIWAYAT
+    // ============================================================
+
     private void tampilkanDetail(
             ReminderData data
     ) {
@@ -1447,43 +1943,57 @@ public class MainActivity extends AppCompatActivity {
 
         detail.append(
                 "Nama: "
-                        + nilai(data.getNama())
+                        + nilai(
+                                data.getNama()
+                        )
                         + "\n"
         );
 
         detail.append(
                 "Nopol: "
-                        + nilai(data.getNopol())
+                        + nilai(
+                                data.getNopol()
+                        )
                         + "\n"
         );
 
         detail.append(
                 "Nomor mesin: "
-                        + nilai(data.getNomorMesin())
+                        + nilai(
+                                data.getNomorMesin()
+                        )
                         + "\n"
         );
 
         detail.append(
                 "KM terakhir: "
-                        + nilai(data.getKmTerakhir())
+                        + nilai(
+                                data.getKmTerakhir()
+                        )
                         + "\n"
         );
 
         detail.append(
                 "WhatsApp: "
-                        + nilai(data.getWhatsapp())
+                        + nilai(
+                                data.getWhatsapp()
+                        )
                         + "\n"
         );
 
         detail.append(
                 "Tanggal input: "
-                        + nilai(data.getTanggalInput())
+                        + nilai(
+                                data.getTanggalInput()
+                        )
                         + "\n"
         );
 
         detail.append(
                 "Jatuh tempo: "
-                        + nilai(data.getJatuhTempo())
+                        + nilai(
+                                data.getJatuhTempo()
+                        )
                         + "\n"
         );
 
@@ -1516,8 +2026,12 @@ public class MainActivity extends AppCompatActivity {
 
         AlertDialog dialog =
                 new AlertDialog.Builder(this)
-                        .setTitle("DETAIL REMINDER")
-                        .setMessage(detail.toString())
+                        .setTitle(
+                                "DETAIL REMINDER"
+                        )
+                        .setMessage(
+                                detail.toString()
+                        )
                         .setNegativeButton(
                                 "TUTUP",
                                 null
@@ -1555,8 +2069,12 @@ public class MainActivity extends AppCompatActivity {
                     hapus.setOnClickListener(
                             v -> {
 
-                                new AlertDialog.Builder(this)
-                                        .setTitle("Hapus data?")
+                                new AlertDialog.Builder(
+                                        this
+                                )
+                                        .setTitle(
+                                                "Hapus data?"
+                                        )
                                         .setMessage(
                                                 "Data reminder ini akan dihapus dari HP."
                                         )
@@ -1572,9 +2090,10 @@ public class MainActivity extends AppCompatActivity {
                                                             data
                                                     );
 
-                                                    localDataStore.delete(
-                                                            data.getId()
-                                                    );
+                                                    localDataStore
+                                                            .delete(
+                                                                    data.getId()
+                                                            );
 
                                                     dialog.dismiss();
 
@@ -1596,7 +2115,9 @@ public class MainActivity extends AppCompatActivity {
         dialog.show();
     }
 
-    private String nilai(String text) {
+    private String nilai(
+            String text
+    ) {
 
         if (text == null
                 || text.trim().isEmpty()) {
@@ -1608,13 +2129,15 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ============================================================
-    // HAPUS RIWAYAT
+    // HAPUS RIWAYAT TERKIRIM
     // ============================================================
 
     private void konfirmasiHapusRiwayat() {
 
         new AlertDialog.Builder(this)
-                .setTitle("🗑️ Hapus riwayat?")
+                .setTitle(
+                        "🗑️ Hapus riwayat?"
+                )
                 .setMessage(
                         "Yang dihapus hanya data yang sudah TERKIRIM.\n\n"
                                 + "Data BELUM TERKIRIM tidak akan dihapus."
@@ -1628,13 +2151,21 @@ public class MainActivity extends AppCompatActivity {
                         (dialog, which) -> {
 
                             List<ReminderData> sent =
-                                    localDataStore.getSent();
+                                    localDataStore
+                                            .getSent();
 
-                            for (ReminderData data : sent) {
-                                batalkanReminder(data);
+                            for (
+                                    ReminderData data
+                                    : sent
+                            ) {
+
+                                batalkanReminder(
+                                        data
+                                );
                             }
 
-                            localDataStore.deleteAllSent();
+                            localDataStore
+                                    .deleteAllSent();
 
                             backupKeGoogleDriveOtomatis();
 
@@ -1649,7 +2180,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ============================================================
-    // GOOGLE DRIVE
+    // BACKUP GOOGLE DRIVE
     // ============================================================
 
     private void backupKeGoogleDrive() {
@@ -1671,165 +2202,181 @@ public class MainActivity extends AppCompatActivity {
                 Toast.LENGTH_SHORT
         ).show();
 
-        googleDriveHelper.mintaIzinDrive(
-                this,
-                new GoogleDriveHelper.DriveCallback() {
+        googleDriveHelper
+                .mintaIzinDrive(
+                        this,
+                        new GoogleDriveHelper.DriveCallback() {
 
-                    @Override
-                    public void onSuccess() {
+                            @Override
+                            public void onSuccess() {
 
-                        googleDriveHelper.uploadDatabase(
-                                localDataStore.toJson(),
-                                new GoogleDriveHelper.DriveCallback() {
+                                googleDriveHelper
+                                        .uploadDatabase(
+                                                localDataStore.toJson(),
+                                                new GoogleDriveHelper.DriveCallback() {
 
-                                    @Override
-                                    public void onSuccess() {
+                                                    @Override
+                                                    public void onSuccess() {
 
-                                        Toast.makeText(
-                                                MainActivity.this,
-                                                "☁️ Backup Google Drive berhasil.",
-                                                Toast.LENGTH_LONG
-                                        ).show();
-                                    }
+                                                        Toast.makeText(
+                                                                MainActivity.this,
+                                                                "☁️ Backup Google Drive berhasil.",
+                                                                Toast.LENGTH_LONG
+                                                        ).show();
+                                                    }
 
-                                    @Override
-                                    public void onError(
-                                            Exception e
-                                    ) {
+                                                    @Override
+                                                    public void onError(
+                                                            Exception e
+                                                    ) {
 
-                                        Toast.makeText(
-                                                MainActivity.this,
-                                                "Backup gagal: "
-                                                        + e.getMessage(),
-                                                Toast.LENGTH_LONG
-                                        ).show();
-                                    }
-                                }
-                        );
-                    }
+                                                        Toast.makeText(
+                                                                MainActivity.this,
+                                                                "Backup gagal: "
+                                                                        + e.getMessage(),
+                                                                Toast.LENGTH_LONG
+                                                        ).show();
+                                                    }
+                                                }
+                                        );
+                            }
 
-                    @Override
-                    public void onError(
-                            Exception e
-                    ) {
+                            @Override
+                            public void onError(
+                                    Exception e
+                            ) {
 
-                        Toast.makeText(
-                                MainActivity.this,
-                                "Izin Google Drive gagal: "
-                                        + e.getMessage(),
-                                Toast.LENGTH_LONG
-                        ).show();
-                    }
-                }
-        );
+                                Toast.makeText(
+                                        MainActivity.this,
+                                        "Izin Google Drive gagal: "
+                                                + e.getMessage(),
+                                        Toast.LENGTH_LONG
+                                ).show();
+                            }
+                        }
+                );
     }
+
+    // ============================================================
+    // BACKUP OTOMATIS
+    // ============================================================
 
     private void backupKeGoogleDriveOtomatis() {
 
         if (localDataStore.size() == 0) {
+
             return;
         }
 
-        googleDriveHelper.mintaIzinDrive(
-                this,
-                new GoogleDriveHelper.DriveCallback() {
+        googleDriveHelper
+                .mintaIzinDrive(
+                        this,
+                        new GoogleDriveHelper.DriveCallback() {
 
-                    @Override
-                    public void onSuccess() {
+                            @Override
+                            public void onSuccess() {
 
-                        googleDriveHelper.uploadDatabase(
-                                localDataStore.toJson(),
-                                new GoogleDriveHelper.DriveCallback() {
+                                googleDriveHelper
+                                        .uploadDatabase(
+                                                localDataStore.toJson(),
+                                                new GoogleDriveHelper.DriveCallback() {
 
-                                    @Override
-                                    public void onSuccess() {
-                                        // Berhasil.
-                                    }
+                                                    @Override
+                                                    public void onSuccess() {
+                                                    }
 
-                                    @Override
-                                    public void onError(
-                                            Exception e
-                                    ) {
-                                        // Backup otomatis gagal.
-                                        // Data lokal tetap aman.
-                                    }
-                                }
-                        );
-                    }
+                                                    @Override
+                                                    public void onError(
+                                                            Exception e
+                                                    ) {
+                                                    }
+                                                }
+                                        );
+                            }
 
-                    @Override
-                    public void onError(
-                            Exception e
-                    ) {
-                        // Data lokal tetap aman.
-                    }
-                }
-        );
+                            @Override
+                            public void onError(
+                                    Exception e
+                            ) {
+                            }
+                        }
+                );
     }
+
+    // ============================================================
+    // RESTORE OTOMATIS
+    // ============================================================
 
     private void restoreDariGoogleDriveOtomatis() {
 
-        googleDriveHelper.mintaIzinDrive(
-                this,
-                new GoogleDriveHelper.DriveCallback() {
+        googleDriveHelper
+                .mintaIzinDrive(
+                        this,
+                        new GoogleDriveHelper.DriveCallback() {
 
-                    @Override
-                    public void onSuccess() {
+                            @Override
+                            public void onSuccess() {
 
-                        googleDriveHelper.downloadDatabase(
-                                new GoogleDriveHelper.DataCallback() {
+                                googleDriveHelper
+                                        .downloadDatabase(
+                                                new GoogleDriveHelper.DataCallback() {
 
-                                    @Override
-                                    public void onSuccess(
-                                            String json
-                                    ) {
+                                                    @Override
+                                                    public void onSuccess(
+                                                            String json
+                                                    ) {
 
-                                        if (json == null
-                                                || json.trim().isEmpty()) {
+                                                        if (json == null
+                                                                || json.trim().isEmpty()) {
 
-                                            return;
-                                        }
+                                                            return;
+                                                        }
 
-                                        localDataStore.restoreFromJson(
-                                                json
+                                                        localDataStore
+                                                                .restoreFromJson(
+                                                                        json
+                                                                );
+
+                                                        jadwalkanSemuaReminder();
+
+                                                        runOnUiThread(
+                                                                () ->
+                                                                        Toast.makeText(
+                                                                                MainActivity.this,
+                                                                                "♻️ Data Google Drive berhasil dipulihkan.",
+                                                                                Toast.LENGTH_LONG
+                                                                        ).show()
+                                                        );
+                                                    }
+
+                                                    @Override
+                                                    public void onError(
+                                                            Exception e
+                                                    ) {
+                                                    }
+                                                }
                                         );
+                            }
 
-                                        jadwalkanSemuaReminder();
-
-                                        runOnUiThread(() -> {
-
-                                            Toast.makeText(
-                                                    MainActivity.this,
-                                                    "♻️ Data Google Drive berhasil dipulihkan.",
-                                                    Toast.LENGTH_LONG
-                                            ).show();
-                                        });
-                                    }
-
-                                    @Override
-                                    public void onError(
-                                            Exception e
-                                    ) {
-                                        // Belum ada backup.
-                                    }
-                                }
-                        );
-                    }
-
-                    @Override
-                    public void onError(
-                            Exception e
-                    ) {
-                        // Belum mendapatkan izin Drive.
-                    }
-                }
-        );
+                            @Override
+                            public void onError(
+                                    Exception e
+                            ) {
+                            }
+                        }
+                );
     }
+
+    // ============================================================
+    // KONFIRMASI RESTORE
+    // ============================================================
 
     private void konfirmasiRestore() {
 
         new AlertDialog.Builder(this)
-                .setTitle("♻️ Restore Google Drive")
+                .setTitle(
+                        "♻️ Restore Google Drive"
+                )
                 .setMessage(
                         "Data lokal di HP akan diganti dengan data backup Google Drive.\n\n"
                                 + "Lanjutkan?"
@@ -1846,6 +2393,10 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
+    // ============================================================
+    // RESTORE MANUAL
+    // ============================================================
+
     private void restoreManual() {
 
         Toast.makeText(
@@ -1854,93 +2405,100 @@ public class MainActivity extends AppCompatActivity {
                 Toast.LENGTH_SHORT
         ).show();
 
-        googleDriveHelper.mintaIzinDrive(
-                this,
-                new GoogleDriveHelper.DriveCallback() {
+        googleDriveHelper
+                .mintaIzinDrive(
+                        this,
+                        new GoogleDriveHelper.DriveCallback() {
 
-                    @Override
-                    public void onSuccess() {
+                            @Override
+                            public void onSuccess() {
 
-                        googleDriveHelper.downloadDatabase(
-                                new GoogleDriveHelper.DataCallback() {
+                                googleDriveHelper
+                                        .downloadDatabase(
+                                                new GoogleDriveHelper.DataCallback() {
 
-                                    @Override
-                                    public void onSuccess(
-                                            String json
-                                    ) {
+                                                    @Override
+                                                    public void onSuccess(
+                                                            String json
+                                                    ) {
 
-                                        if (json == null
-                                                || json.trim().isEmpty()) {
+                                                        if (json == null
+                                                                || json.trim().isEmpty()) {
 
-                                            runOnUiThread(() ->
-                                                    Toast.makeText(
-                                                            MainActivity.this,
-                                                            "Backup tidak ditemukan.",
-                                                            Toast.LENGTH_LONG
-                                                    ).show()
-                                            );
+                                                            runOnUiThread(
+                                                                    () ->
+                                                                            Toast.makeText(
+                                                                                    MainActivity.this,
+                                                                                    "Backup tidak ditemukan.",
+                                                                                    Toast.LENGTH_LONG
+                                                                            ).show()
+                                                            );
 
-                                            return;
-                                        }
+                                                            return;
+                                                        }
 
-                                        localDataStore.restoreFromJson(
-                                                json
+                                                        localDataStore
+                                                                .restoreFromJson(
+                                                                        json
+                                                                );
+
+                                                        jadwalkanSemuaReminder();
+
+                                                        runOnUiThread(
+                                                                () ->
+                                                                        Toast.makeText(
+                                                                                MainActivity.this,
+                                                                                "♻️ Restore berhasil.",
+                                                                                Toast.LENGTH_LONG
+                                                                        ).show()
+                                                        );
+                                                    }
+
+                                                    @Override
+                                                    public void onError(
+                                                            Exception e
+                                                    ) {
+
+                                                        runOnUiThread(
+                                                                () ->
+                                                                        Toast.makeText(
+                                                                                MainActivity.this,
+                                                                                "Restore gagal: "
+                                                                                        + e.getMessage(),
+                                                                                Toast.LENGTH_LONG
+                                                                        ).show()
+                                                        );
+                                                    }
+                                                }
                                         );
+                            }
 
-                                        jadwalkanSemuaReminder();
+                            @Override
+                            public void onError(
+                                    Exception e
+                            ) {
 
-                                        runOnUiThread(() -> {
-
-                                            Toast.makeText(
-                                                    MainActivity.this,
-                                                    "♻️ Restore berhasil.",
-                                                    Toast.LENGTH_LONG
-                                            ).show();
-                                        });
-                                    }
-
-                                    @Override
-                                    public void onError(
-                                            Exception e
-                                    ) {
-
-                                        runOnUiThread(() ->
-                                                Toast.makeText(
-                                                        MainActivity.this,
-                                                        "Restore gagal: "
-                                                                + e.getMessage(),
-                                                        Toast.LENGTH_LONG
-                                                ).show()
-                                        );
-                                    }
-                                }
-                        );
-                    }
-
-                    @Override
-                    public void onError(
-                            Exception e
-                    ) {
-
-                        Toast.makeText(
-                                MainActivity.this,
-                                "Google Drive tidak bisa diakses.",
-                                Toast.LENGTH_LONG
-                        ).show();
-                    }
-                }
-        );
+                                Toast.makeText(
+                                        MainActivity.this,
+                                        "Google Drive tidak bisa diakses.",
+                                        Toast.LENGTH_LONG
+                                ).show();
+                            }
+                        }
+                );
     }
 
     // ============================================================
-    // UTIL
+    // DESTROY
     // ============================================================
 
     @Override
     protected void onDestroy() {
+
         super.onDestroy();
 
         if (googleDriveHelper != null) {
+
             googleDriveHelper.shutdown();
         }
     }
