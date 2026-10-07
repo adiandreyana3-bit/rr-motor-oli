@@ -4,7 +4,9 @@ import android.Manifest;
 import android.app.AlarmManager;
 import android.app.DatePickerDialog;
 import android.app.PendingIntent;
+import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
@@ -14,743 +16,548 @@ import android.provider.ContactsContract;
 import android.provider.Settings;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.View;
 import android.widget.*;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
-import com.google.firebase.auth.FirebaseAuth;
-import com.google.firebase.firestore.DocumentSnapshot;
-import com.google.firebase.firestore.FirebaseFirestore;
-import com.google.firebase.firestore.Query;
-import com.google.firebase.firestore.WriteBatch;
-
-import java.net.URLEncoder;
+import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
-import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
-import java.util.Map;
+import java.util.UUID;
 
 public class MainActivity extends AppCompatActivity {
 
-private FirebaseAuth auth;
-private FirebaseFirestore db;
+    private static final String PREF_LOGIN = "RR_MOTOR_LOGIN";
+    private static final String KEY_LOGGED_IN = "logged_in";
 
-private EditText namaInput;
-private EditText nopolInput;
-private EditText mesinInput;
-private EditText kmInput;
-private EditText waInput;
-private EditText tanggalInput;
+    private static final int REQ_CONTACT = 1001;
+    private static final int REQ_NOTIFICATION = 1002;
 
-private Spinner jatuhTempoSpinner;
+    private LocalDataStore localDataStore;
+    private GoogleDriveHelper googleDriveHelper;
 
-private TextView hasilKmText;
+    private EditText etNama;
+    private EditText etNopol;
+    private EditText etNomorMesin;
+    private EditText etKm;
+    private EditText etWhatsapp;
+    private EditText etTanggal;
 
-private Button simpanButton;
-private Button dataBaruButton;
-private Button riwayatButton;
-private Button hapusRiwayatButton;
+    private Spinner spinnerBulan;
 
-private String tanggalTerpilih = "";
+    private Button btnSimpan;
+    private Button btnDataBaru;
+    private Button btnRiwayat;
+    private Button btnHapusRiwayat;
+    private Button btnBackup;
+    private Button btnRestore;
 
-private static final int CONTACT_PICKER_REQUEST = 1001;
+    private TextView tvKmInfo;
 
-private final ActivityResultLauncher<String> izinKontakLauncher =
-        registerForActivityResult(
-                new ActivityResultContracts.RequestPermission(),
-                diberikan -> {
-                    if (diberikan) {
-                        bukaKontak();
-                    } else {
-                        Toast.makeText(
-                                this,
-                                "Izin kontak diperlukan untuk memilih nomor WhatsApp.",
-                                Toast.LENGTH_LONG
-                        ).show();
+    private final SimpleDateFormat tanggalFormat =
+            new SimpleDateFormat("dd-MM-yyyy", Locale.getDefault());
+
+    private final ActivityResultLauncher<String> notificationPermissionLauncher =
+            registerForActivityResult(
+                    new ActivityResultContracts.RequestPermission(),
+                    granted -> {
+                        if (!granted) {
+                            Toast.makeText(
+                                    this,
+                                    "Izin notifikasi belum diberikan.",
+                                    Toast.LENGTH_SHORT
+                            ).show();
+                        }
                     }
-                }
-        );
+            );
 
-private final ActivityResultLauncher<String> izinNotifikasiLauncher =
-        registerForActivityResult(
-                new ActivityResultContracts.RequestPermission(),
-                diberikan -> {
-                    if (!diberikan) {
-                        Toast.makeText(
-                                this,
-                                "Izin notifikasi tidak diberikan. Reminder tidak akan tampil.",
-                                Toast.LENGTH_LONG
-                        ).show();
+    private final ActivityResultLauncher<Intent> contactPickerLauncher =
+            registerForActivityResult(
+                    new ActivityResultContracts.StartActivityForResult(),
+                    result -> {
+                        if (result.getResultCode() == RESULT_OK
+                                && result.getData() != null
+                                && result.getData().getData() != null) {
+
+                            Uri contactUri = result.getData().getData();
+                            ambilDataKontak(contactUri);
+                        }
                     }
-                }
+            );
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        localDataStore = new LocalDataStore(this);
+        googleDriveHelper = new GoogleDriveHelper(this);
+
+        if (!isLoggedIn()) {
+            bukaLogin();
+            return;
+        }
+
+        buatTampilan();
+
+        mintaIzinNotifikasi();
+
+        prosesIntentNotifikasi();
+
+        cekIzinAlarm();
+
+        // Kalau HP baru / aplikasi baru dan data lokal kosong,
+        // coba pulihkan data dari Google Drive.
+        if (localDataStore.size() == 0) {
+            restoreDariGoogleDriveOtomatis();
+        } else {
+            jadwalkanSemuaReminder();
+        }
+    }
+
+    // ============================================================
+    // LOGIN
+    // ============================================================
+
+    private boolean isLoggedIn() {
+        SharedPreferences pref =
+                getSharedPreferences(PREF_LOGIN, MODE_PRIVATE);
+
+        return pref.getBoolean(KEY_LOGGED_IN, false);
+    }
+
+    private void bukaLogin() {
+        Intent intent = new Intent(this, LoginActivity.class);
+        startActivity(intent);
+        finish();
+    }
+
+    // ============================================================
+    // TAMPILAN
+    // ============================================================
+
+    private void buatTampilan() {
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(16), dp(12), dp(16), dp(20));
+        root.setBackgroundColor(0xFFF5F5F5);
+
+        ScrollView scrollView = new ScrollView(this);
+
+        LinearLayout isi = new LinearLayout(this);
+        isi.setOrientation(LinearLayout.VERTICAL);
+
+        TextView title = new TextView(this);
+        title.setText("🏍️ RR MOTOR");
+        title.setTextSize(28);
+        title.setGravity(Gravity.CENTER);
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
+        title.setTextColor(0xFF087F23);
+
+        isi.addView(title);
+
+        TextView subtitle = new TextView(this);
+        subtitle.setText("REMINDER GANTI OLI");
+        subtitle.setTextSize(16);
+        subtitle.setGravity(Gravity.CENTER);
+        subtitle.setTextColor(0xFF555555);
+
+        isi.addView(subtitle);
+
+        isi.addView(jarak(12));
+
+        etNama = buatEditText(
+                "Nama pelanggan",
+                InputType.TYPE_CLASS_TEXT |
+                        InputType.TYPE_TEXT_FLAG_CAP_WORDS
+        );
+        isi.addView(etNama);
+
+        etNopol = buatEditText(
+                "Nopol / Plat nomor (opsional)",
+                InputType.TYPE_CLASS_TEXT |
+                        InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+        );
+        isi.addView(etNopol);
+
+        etNomorMesin = buatEditText(
+                "Nomor mesin (opsional)",
+                InputType.TYPE_CLASS_TEXT
+        );
+        isi.addView(etNomorMesin);
+
+        etKm = buatEditText(
+                "KM terakhir (opsional)",
+                InputType.TYPE_CLASS_NUMBER
+        );
+        isi.addView(etKm);
+
+        LinearLayout waRow = new LinearLayout(this);
+        waRow.setOrientation(LinearLayout.HORIZONTAL);
+        waRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        etWhatsapp = buatEditText(
+                "Nomor WhatsApp",
+                InputType.TYPE_CLASS_PHONE
         );
 
-@Override
-protected void onCreate(Bundle savedInstanceState) {
-    super.onCreate(savedInstanceState);
+        LinearLayout.LayoutParams waParams =
+                new LinearLayout.LayoutParams(
+                        0,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        1
+                );
 
-    auth = FirebaseAuth.getInstance();
-    db = FirebaseFirestore.getInstance();
+        waRow.addView(etWhatsapp, waParams);
 
-    if (auth.getCurrentUser() == null) {
-        kembaliKeLogin();
-        return;
-    }
+        Button btnKontak = new Button(this);
+        btnKontak.setText("📱 KONTAK");
+        btnKontak.setOnClickListener(v -> bukaKontak());
 
-    buatTampilan();
+        waRow.addView(btnKontak);
 
-    cekLoginFirebase();
+        isi.addView(waRow);
 
-    /*
-     * Tidak ada penghapusan otomatis.
-     *
-     * Fungsi ini hanya mengecek reminder lama
-     * yang sudah lewat tetapi masih BELUM TERKIRIM.
-     */
-    cekReminderBelumTerkirim();
-
-    prosesNotifikasiIntent(getIntent());
-}
-
-@Override
-protected void onNewIntent(Intent intent) {
-    super.onNewIntent(intent);
-
-    setIntent(intent);
-
-    prosesNotifikasiIntent(intent);
-}
-
-// =====================================================
-// PROSES NOTIFIKASI
-// =====================================================
-
-private void prosesNotifikasiIntent(Intent intent) {
-
-    if (intent == null) {
-        return;
-    }
-
-    boolean dariNotifikasi =
-            intent.getBooleanExtra(
-                    "reminder_dari_notifikasi",
-                    false
-            );
-
-    if (!dariNotifikasi) {
-        return;
-    }
-
-    String wa =
-            intent.getStringExtra("reminder_wa");
-
-    String pesan =
-            intent.getStringExtra("reminder_pesan");
-
-    if (wa != null &&
-            !wa.trim().isEmpty()) {
-
-        bukaWhatsAppDariNotifikasi(
-                wa,
-                pesan
+        etTanggal = buatEditText(
+                "Tanggal input",
+                InputType.TYPE_CLASS_DATETIME
         );
 
-        intent.removeExtra(
-                "reminder_dari_notifikasi"
-        );
-    }
-}
+        etTanggal.setFocusable(false);
+        etTanggal.setClickable(true);
 
-private void kembaliKeLogin() {
+        etTanggal.setOnClickListener(v -> pilihTanggal());
 
-    Intent intent =
-            new Intent(
-                    MainActivity.this,
-                    LoginActivity.class
-            );
+        isi.addView(etTanggal);
 
-    startActivity(intent);
-    finish();
-}
+        spinnerBulan = new Spinner(this);
 
-// =====================================================
-// TAMPILAN UTAMA
-// =====================================================
+        String[] pilihanBulan = {
+                "1 BULAN",
+                "2 BULAN"
+        };
 
-private void buatTampilan() {
-
-    ScrollView scrollView =
-            new ScrollView(this);
-
-    scrollView.setFillViewport(true);
-    scrollView.setClipToPadding(false);
-
-    LinearLayout utama =
-            new LinearLayout(this);
-
-    utama.setOrientation(
-            LinearLayout.VERTICAL
-    );
-
-    utama.setPadding(
-            25,
-            20,
-            25,
-            40
-    );
-
-    scrollView.addView(utama);
-
-    TextView judul =
-            new TextView(this);
-
-    judul.setText("🏍️ RR MOTOR");
-    judul.setTextSize(17);
-    judul.setGravity(Gravity.CENTER);
-    judul.setPadding(0, 0, 0, 5);
-
-    TextView subjudul =
-            new TextView(this);
-
-    subjudul.setText(
-            "REMINDER GANTI OLI"
-    );
-
-    subjudul.setTextSize(14);
-    subjudul.setGravity(Gravity.CENTER);
-    subjudul.setPadding(
-            0,
-            0,
-            0,
-            20
-    );
-
-    utama.addView(judul);
-    utama.addView(subjudul);
-
-    // =====================================================
-    // NAMA
-    // =====================================================
-
-    namaInput =
-            buatInput(
-                    "Nama pelanggan (opsional)",
-                    InputType.TYPE_CLASS_TEXT
-            );
-
-    utama.addView(namaInput);
-
-    // =====================================================
-    // NOPOL
-    // =====================================================
-
-    nopolInput =
-            buatInput(
-                    "Nopol (opsional)",
-                    InputType.TYPE_CLASS_TEXT
-            );
-
-    utama.addView(nopolInput);
-
-    // =====================================================
-    // NOMOR MESIN
-    // =====================================================
-
-    mesinInput =
-            buatInput(
-                    "Nomor mesin (opsional)",
-                    InputType.TYPE_CLASS_TEXT
-            );
-
-    utama.addView(mesinInput);
-
-    // =====================================================
-    // KM
-    // =====================================================
-
-    kmInput =
-            buatInput(
-                    "KM terakhir (opsional)",
-                    InputType.TYPE_CLASS_NUMBER
-            );
-
-    utama.addView(kmInput);
-
-    hasilKmText =
-            new TextView(this);
-
-    hasilKmText.setTextSize(15);
-
-    hasilKmText.setPadding(
-            5,
-            0,
-            5,
-            15
-    );
-
-    utama.addView(hasilKmText);
-
-    kmInput.setOnFocusChangeListener(
-            (v, hasFocus) -> {
-
-                if (!hasFocus) {
-                    tampilkanPerhitunganKm();
-                }
-            }
-    );
-
-    kmInput.setOnEditorActionListener(
-            (v, actionId, event) -> {
-
-                tampilkanPerhitunganKm();
-
-                return false;
-            }
-    );
-
-    // =====================================================
-    // WHATSAPP
-    // =====================================================
-
-    TextView labelWa =
-            new TextView(this);
-
-    labelWa.setText(
-            "Nomor WhatsApp *"
-    );
-
-    labelWa.setTextSize(14);
-
-    labelWa.setPadding(
-            5,
-            10,
-            5,
-            5
-    );
-
-    utama.addView(labelWa);
-
-    LinearLayout barisWa =
-            new LinearLayout(this);
-
-    barisWa.setOrientation(
-            LinearLayout.HORIZONTAL
-    );
-
-    barisWa.setGravity(
-            Gravity.CENTER_VERTICAL
-    );
-
-    waInput =
-            new EditText(this);
-
-    waInput.setHint(
-            "08xxxxxxxxxx"
-    );
-
-    waInput.setSingleLine(true);
-
-    waInput.setInputType(
-            InputType.TYPE_CLASS_PHONE
-    );
-
-    LinearLayout.LayoutParams waParams =
-            new LinearLayout.LayoutParams(
-                    0,
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    1
-            );
-
-    barisWa.addView(
-            waInput,
-            waParams
-    );
-
-    Button kontakButton =
-            new Button(this);
-
-    kontakButton.setText(
-            "📱 KONTAK"
-    );
-
-    LinearLayout.LayoutParams kontakParams =
-            new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-            );
-
-    kontakParams.setMargins(
-            8,
-            0,
-            0,
-            0
-    );
-
-    barisWa.addView(
-            kontakButton,
-            kontakParams
-    );
-
-    kontakButton.setOnClickListener(
-            v -> {
-
-                if (ContextCompat.checkSelfPermission(
+        ArrayAdapter<String> adapter =
+                new ArrayAdapter<>(
                         this,
-                        Manifest.permission.READ_CONTACTS
-                ) == PackageManager.PERMISSION_GRANTED) {
-
-                    bukaKontak();
-
-                } else {
-
-                    izinKontakLauncher.launch(
-                            Manifest.permission.READ_CONTACTS
-                    );
-                }
-            }
-    );
-
-    utama.addView(barisWa);
-
-    // =====================================================
-    // TANGGAL INPUT
-    // =====================================================
-
-    TextView labelTanggal =
-            new TextView(this);
-
-    labelTanggal.setText(
-            "Tanggal input data *"
-    );
-
-    labelTanggal.setTextSize(14);
-
-    labelTanggal.setPadding(
-            5,
-            15,
-            5,
-            5
-    );
-
-    utama.addView(labelTanggal);
-
-    tanggalInput =
-            buatInput(
-                    "Pilih tanggal",
-                    InputType.TYPE_CLASS_DATETIME
-            );
-
-    tanggalInput.setFocusable(false);
-    tanggalInput.setClickable(true);
-
-    tanggalInput.setOnClickListener(
-            v -> tampilkanDatePicker()
-    );
-
-    utama.addView(tanggalInput);
-
-    // =====================================================
-    // JATUH TEMPO
-    // =====================================================
-
-    TextView labelJatuhTempo =
-            new TextView(this);
-
-    labelJatuhTempo.setText(
-            "Jatuh tempo reminder"
-    );
-
-    labelJatuhTempo.setTextSize(14);
-
-    labelJatuhTempo.setPadding(
-            5,
-            15,
-            5,
-            5
-    );
-
-    utama.addView(labelJatuhTempo);
-
-    jatuhTempoSpinner =
-            new Spinner(this);
-
-    String[] pilihanTempo = {
-            "1 BULAN",
-            "2 BULAN"
-    };
-
-    ArrayAdapter<String> adapter =
-            new ArrayAdapter<>(
-                    this,
-                    android.R.layout.simple_spinner_dropdown_item,
-                    pilihanTempo
-            );
-
-    jatuhTempoSpinner.setAdapter(
-            adapter
-    );
-
-    utama.addView(
-            jatuhTempoSpinner
-    );
-
-    // =====================================================
-    // SIMPAN
-    // =====================================================
-
-    simpanButton =
-            new Button(this);
-
-    simpanButton.setText(
-            "💾 SIMPAN DATA"
-    );
-
-    simpanButton.setOnClickListener(
-            v -> simpanData()
-    );
-
-    utama.addView(
-            simpanButton
-    );
-
-    // =====================================================
-    // DATA BARU
-    // =====================================================
-
-    dataBaruButton =
-            new Button(this);
-
-    dataBaruButton.setText(
-            "➕ DATA BARU"
-    );
-
-    dataBaruButton.setOnClickListener(
-            v -> dataBaru()
-    );
-
-    utama.addView(
-            dataBaruButton
-    );
-
-    // =====================================================
-    // RIWAYAT
-    // =====================================================
-
-    riwayatButton =
-            new Button(this);
-
-    riwayatButton.setText(
-            "📋 RIWAYAT REMINDER"
-    );
-
-    riwayatButton.setOnClickListener(
-            v -> tampilkanRiwayat()
-    );
-
-    utama.addView(
-            riwayatButton
-    );
-
-    // =====================================================
-    // HAPUS RIWAYAT
-    // =====================================================
-
-    hapusRiwayatButton =
-            new Button(this);
-
-    hapusRiwayatButton.setText(
-            "🗑️ HAPUS RIWAYAT"
-    );
-
-    hapusRiwayatButton.setOnClickListener(
-            v -> tampilkanMenuHapusRiwayat()
-    );
-
-    utama.addView(
-            hapusRiwayatButton
-    );
-
-    setContentView(scrollView);
-}
-
-private EditText buatInput(
-        String hint,
-        int inputType
-) {
-
-    EditText input =
-            new EditText(this);
-
-    input.setHint(hint);
-    input.setSingleLine(true);
-    input.setTextSize(16);
-    input.setInputType(inputType);
-
-    LinearLayout.LayoutParams params =
-            new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-            );
-
-    params.setMargins(
-            0,
-            5,
-            0,
-            5
-    );
-
-    input.setLayoutParams(params);
-
-    return input;
-}
-
-// =====================================================
-// DATE PICKER
-// =====================================================
-
-private void tampilkanDatePicker() {
-
-    Calendar kalender =
-            Calendar.getInstance();
-
-    DatePickerDialog dialog =
-            new DatePickerDialog(
-                    this,
-                    (view, year, month, dayOfMonth) -> {
-
-                        Calendar pilih =
-                                Calendar.getInstance();
-
-                        pilih.set(
-                                year,
-                                month,
-                                dayOfMonth,
-                                0,
-                                0,
-                                0
-                        );
-
-                        pilih.set(
-                                Calendar.MILLISECOND,
-                                0
-                        );
-
-                        SimpleDateFormat format =
-                                new SimpleDateFormat(
-                                        "dd-MM-yyyy",
-                                        Locale.getDefault()
-                                );
-
-                        tanggalTerpilih =
-                                format.format(
-                                        pilih.getTime()
-                                );
-
-                        tanggalInput.setText(
-                                tanggalTerpilih
-                        );
-                    },
-                    kalender.get(Calendar.YEAR),
-                    kalender.get(Calendar.MONTH),
-                    kalender.get(Calendar.DAY_OF_MONTH)
-            );
-
-    dialog.show();
-}
-
-// =====================================================
-// HITUNG KM
-// =====================================================
-
-private void tampilkanPerhitunganKm() {
-
-    String teksKm =
-            kmInput.getText()
-                    .toString()
-                    .trim();
-
-    if (teksKm.isEmpty()) {
-
-        hasilKmText.setText("");
-
-        return;
-    }
-
-    try {
-
-        long km =
-                Long.parseLong(
-                        teksKm.replace(
-                                ".",
-                                ""
-                        )
+                        android.R.layout.simple_spinner_dropdown_item,
+                        pilihanBulan
                 );
 
-        long maksimal =
-                hitungKelipatanBerikutnya(
-                        km,
-                        1500
-                );
+        spinnerBulan.setAdapter(adapter);
 
-        long palingLambat =
-                hitungKelipatanBerikutnya(
-                        km,
-                        2000
-                );
+        isi.addView(spinnerBulan);
 
-        hasilKmText.setText(
-                "Maksimal ganti oli: "
-                        + formatKm(maksimal)
-                        + " KM\n"
-                        + "Paling lambat: "
-                        + formatKm(palingLambat)
-                        + " KM"
+        isi.addView(jarak(8));
+
+        tvKmInfo = new TextView(this);
+        tvKmInfo.setTextSize(14);
+        tvKmInfo.setTextColor(0xFF444444);
+        tvKmInfo.setPadding(
+                dp(10),
+                dp(10),
+                dp(10),
+                dp(10)
         );
 
-    } catch (Exception e) {
+        isi.addView(tvKmInfo);
 
-        hasilKmText.setText("");
+        etKm.setOnFocusChangeListener((v, hasFocus) -> {
+            if (!hasFocus) {
+                tampilkanPerhitunganKm();
+            }
+        });
+
+        isi.addView(jarak(8));
+
+        btnSimpan = buatButton(
+                "💾 SIMPAN DATA",
+                0xFF087F23
+        );
+
+        btnSimpan.setOnClickListener(v -> simpanData());
+
+        isi.addView(btnSimpan);
+
+        btnDataBaru = buatButton(
+                "➕ DATA BARU",
+                0xFF087F23
+        );
+
+        btnDataBaru.setOnClickListener(v -> dataBaru());
+
+        isi.addView(btnDataBaru);
+
+        btnRiwayat = buatButton(
+                "📋 RIWAYAT REMINDER",
+                0xFF087F23
+        );
+
+        btnRiwayat.setOnClickListener(v -> tampilkanRiwayat());
+
+        isi.addView(btnRiwayat);
+
+        btnHapusRiwayat = buatButton(
+                "🗑️ HAPUS RIWAYAT TERKIRIM",
+                0xFF8B0000
+        );
+
+        btnHapusRiwayat.setOnClickListener(
+                v -> konfirmasiHapusRiwayat()
+        );
+
+        isi.addView(btnHapusRiwayat);
+
+        btnBackup = buatButton(
+                "☁️ BACKUP KE GOOGLE DRIVE",
+                0xFF087F23
+        );
+
+        btnBackup.setOnClickListener(
+                v -> backupKeGoogleDrive()
+        );
+
+        isi.addView(btnBackup);
+
+        btnRestore = buatButton(
+                "♻️ RESTORE DARI GOOGLE DRIVE",
+                0xFF087F23
+        );
+
+        btnRestore.setOnClickListener(
+                v -> konfirmasiRestore()
+        );
+
+        isi.addView(btnRestore);
+
+        scrollView.addView(isi);
+
+        root.addView(
+                scrollView,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        0,
+                        1
+                )
+        );
+
+        setContentView(root);
+
+        isiTanggalHariIni();
+
+        btnDataBaru.setVisibility(View.VISIBLE);
     }
-}
 
-private long hitungKelipatanBerikutnya(
-        long km,
-        long kelipatan
-) {
+    private EditText buatEditText(
+            String hint,
+            int inputType
+    ) {
 
-    if (km < 0) {
-        return kelipatan;
+        EditText editText = new EditText(this);
+
+        editText.setHint(hint);
+        editText.setTextSize(16);
+        editText.setSingleLine(true);
+        editText.setInputType(inputType);
+        editText.setPadding(
+                dp(12),
+                dp(10),
+                dp(12),
+                dp(10)
+        );
+
+        LinearLayout.LayoutParams params =
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                );
+
+        params.setMargins(0, dp(4), 0, dp(4));
+
+        editText.setLayoutParams(params);
+
+        return editText;
     }
 
-    return km + kelipatan;
-}
+    private Button buatButton(
+            String text,
+            int color
+    ) {
 
-private String formatKm(long angka) {
+        Button button = new Button(this);
 
-    return String.format(
-            Locale.getDefault(),
-            "%,d",
-            angka
-    ).replace(
-            ",",
-            "."
-    );
-}
+        button.setText(text);
+        button.setTextSize(14);
+        button.setTextColor(0xFFFFFFFF);
+        button.setBackgroundColor(color);
 
-// =====================================================
-// KONTAK
-// =====================================================
+        LinearLayout.LayoutParams params =
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                );
 
-private void bukaKontak() {
+        params.setMargins(
+                0,
+                dp(5),
+                0,
+                dp(5)
+        );
 
-    try {
+        button.setLayoutParams(params);
+
+        return button;
+    }
+
+    private TextView jarak(int dp) {
+        TextView view = new TextView(this);
+
+        view.setHeight(dp(dp));
+
+        return view;
+    }
+
+    private int dp(int value) {
+        return (int) (
+                value *
+                        getResources()
+                                .getDisplayMetrics()
+                                .density
+        );
+    }
+
+    // ============================================================
+    // TANGGAL
+    // ============================================================
+
+    private void isiTanggalHariIni() {
+
+        etTanggal.setText(
+                tanggalFormat.format(new Date())
+        );
+    }
+
+    private void pilihTanggal() {
+
+        Calendar calendar = Calendar.getInstance();
+
+        try {
+            Date date =
+                    tanggalFormat.parse(
+                            etTanggal.getText().toString()
+                    );
+
+            if (date != null) {
+                calendar.setTime(date);
+            }
+
+        } catch (Exception ignored) {
+        }
+
+        DatePickerDialog dialog =
+                new DatePickerDialog(
+                        this,
+                        (view, year, month, dayOfMonth) -> {
+
+                            Calendar selected =
+                                    Calendar.getInstance();
+
+                            selected.set(
+                                    year,
+                                    month,
+                                    dayOfMonth
+                            );
+
+                            etTanggal.setText(
+                                    tanggalFormat.format(
+                                            selected.getTime()
+                                    )
+                            );
+                        },
+                        calendar.get(Calendar.YEAR),
+                        calendar.get(Calendar.MONTH),
+                        calendar.get(Calendar.DAY_OF_MONTH)
+                );
+
+        dialog.show();
+    }
+
+    // ============================================================
+    // HITUNG KM
+    // ============================================================
+
+    private void tampilkanPerhitunganKm() {
+
+        String kmText =
+                etKm.getText().toString().trim();
+
+        if (kmText.isEmpty()) {
+            tvKmInfo.setText("");
+            return;
+        }
+
+        try {
+
+            long km =
+                    Long.parseLong(kmText);
+
+            long maksimal =
+                    km + 1500;
+
+            long palingLambat =
+                    km + 2000;
+
+            tvKmInfo.setText(
+                    "🔧 PERKIRAAN GANTI OLI\n\n" +
+                    "Maksimal ganti oli : " +
+                    maksimal +
+                    " KM\n" +
+                    "Paling lambat       : " +
+                    palingLambat +
+                    " KM"
+            );
+
+        } catch (Exception e) {
+
+            tvKmInfo.setText(
+                    "KM tidak valid."
+            );
+        }
+    }
+
+    // ============================================================
+    // KONTAK
+    // ============================================================
+
+    private void bukaKontak() {
+
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.READ_CONTACTS
+        ) != PackageManager.PERMISSION_GRANTED) {
+
+            ActivityCompat.requestPermissions(
+                    this,
+                    new String[]{
+                            Manifest.permission.READ_CONTACTS
+                    },
+                    REQ_CONTACT
+            );
+
+            return;
+        }
 
         Intent intent =
                 new Intent(
@@ -758,1752 +565,1383 @@ private void bukaKontak() {
                         ContactsContract.CommonDataKinds.Phone.CONTENT_URI
                 );
 
-        startActivityForResult(
-                intent,
-                CONTACT_PICKER_REQUEST
-        );
-
-    } catch (Exception e) {
-
-        Toast.makeText(
-                this,
-                "Tidak dapat membuka kontak.",
-                Toast.LENGTH_LONG
-        ).show();
-    }
-}
-
-@Override
-protected void onActivityResult(
-        int requestCode,
-        int resultCode,
-        Intent data
-) {
-
-    super.onActivityResult(
-            requestCode,
-            resultCode,
-            data
-    );
-
-    if (requestCode != CONTACT_PICKER_REQUEST) {
-        return;
+        contactPickerLauncher.launch(intent);
     }
 
-    if (resultCode != RESULT_OK ||
-            data == null) {
+    private void ambilDataKontak(Uri contactUri) {
 
-        return;
-    }
-
-    Uri contactUri =
-            data.getData();
-
-    if (contactUri == null) {
-        return;
-    }
-
-    Cursor cursor = null;
-
-    try {
-
-        cursor =
-                getContentResolver().query(
-                        contactUri,
-                        new String[]{
-                                ContactsContract.CommonDataKinds.Phone.NUMBER
-                        },
-                        null,
-                        null,
-                        null
-                );
-
-        if (cursor != null &&
-                cursor.moveToFirst()) {
-
-            int index =
-                    cursor.getColumnIndex(
-                            ContactsContract.CommonDataKinds.Phone.NUMBER
-                    );
-
-            if (index >= 0) {
-
-                String nomor =
-                        cursor.getString(index);
-
-                waInput.setText(nomor);
-            }
-        }
-
-    } catch (Exception e) {
-
-        Toast.makeText(
-                this,
-                "Nomor kontak tidak dapat dibaca.",
-                Toast.LENGTH_LONG
-        ).show();
-
-    } finally {
-
-        if (cursor != null) {
-            cursor.close();
-        }
-    }
-}
-
-// =====================================================
-// SIMPAN DATA
-// =====================================================
-
-private void simpanData() {
-
-    if (auth.getCurrentUser() == null) {
-
-        kembaliKeLogin();
-
-        return;
-    }
-
-    String nama =
-            namaInput.getText()
-                    .toString()
-                    .trim();
-
-    String nopol =
-            nopolInput.getText()
-                    .toString()
-                    .trim();
-
-    String mesin =
-            mesinInput.getText()
-                    .toString()
-                    .trim();
-
-    String km =
-            kmInput.getText()
-                    .toString()
-                    .trim();
-
-    String wa =
-            waInput.getText()
-                    .toString()
-                    .trim();
-
-    String tanggal =
-            tanggalInput.getText()
-                    .toString()
-                    .trim();
-
-    if (wa.isEmpty()) {
-
-        waInput.setError(
-                "Nomor WhatsApp wajib diisi"
-        );
-
-        waInput.requestFocus();
-
-        return;
-    }
-
-    if (tanggal.isEmpty()) {
-
-        tanggalInput.setError(
-                "Tanggal input wajib diisi"
-        );
-
-        tanggalInput.requestFocus();
-
-        Toast.makeText(
-                this,
-                "Tanggal input data wajib diisi.",
-                Toast.LENGTH_LONG
-        ).show();
-
-        return;
-    }
-
-    String pilihan =
-            jatuhTempoSpinner
-                    .getSelectedItem()
-                    .toString();
-
-    int jumlahBulan = 1;
-
-    if (pilihan.startsWith("2")) {
-        jumlahBulan = 2;
-    }
-
-    String pesan =
-            buatPesanWhatsApp(
-                    nama,
-                    nopol,
-                    mesin,
-                    km,
-                    jumlahBulan
-            );
-
-    long waktuInput =
-            System.currentTimeMillis();
-
-    long waktuReminder =
-            hitungTanggalReminder(
-                    tanggal,
-                    jumlahBulan
-            );
-
-    if (waktuReminder <= 0) {
-
-        Toast.makeText(
-                this,
-                "Tanggal tidak valid.",
-                Toast.LENGTH_LONG
-        ).show();
-
-        return;
-    }
-
-    Map<String, Object> data =
-            new HashMap<>();
-
-    data.put("nama", nama);
-    data.put("nopol", nopol);
-    data.put("nomorMesin", mesin);
-    data.put("kmTerakhir", km);
-    data.put("whatsapp", wa);
-    data.put("tanggalInput", tanggal);
-    data.put("jatuhTempo", pilihan);
-    data.put("pesanWhatsApp", pesan);
-    data.put(
-            "waktuReminder",
-            waktuReminder
-    );
-
-    data.put(
-            "reminderTerkirim",
-            false
-    );
-
-    data.put(
-            "waktuTerkirim",
-            0L
-    );
-
-    /*
-     * deleteAt sengaja tidak digunakan.
-     */
-    data.put(
-            "deleteAt",
-            0L
-    );
-
-    data.put(
-            "waktuSimpan",
-            waktuInput
-    );
-
-    simpanButton.setEnabled(false);
-
-    db.collection("reminders")
-            .add(data)
-            .addOnSuccessListener(
-                    documentReference -> {
-
-                        String documentId =
-                                documentReference.getId();
-
-                        jadwalkanReminder(
-                                waktuReminder,
-                                documentId,
-                                nama,
-                                wa,
-                                pesan
-                        );
-
-                        Toast.makeText(
-                                this,
-                                "Data berhasil disimpan.\nReminder sudah dijadwalkan.",
-                                Toast.LENGTH_LONG
-                        ).show();
-
-                        simpanButton.setEnabled(false);
-                    }
-            )
-            .addOnFailureListener(
-                    e -> {
-
-                        simpanButton.setEnabled(true);
-
-                        Toast.makeText(
-                                this,
-                                "Gagal menyimpan data: "
-                                        + e.getMessage(),
-                                Toast.LENGTH_LONG
-                        ).show();
-                    }
-            );
-}
-
-// =====================================================
-// PESAN WHATSAPP
-// =====================================================
-
-private String buatPesanWhatsApp(
-        String nama,
-        String nopol,
-        String mesin,
-        String km,
-        int jumlahBulan
-) {
-
-    String sapaan;
-
-    if (nama.isEmpty()) {
-
-        sapaan =
-                "Halo Bapak/Ibu.";
-
-    } else {
-
-        sapaan =
-                "Halo Bapak/Ibu "
-                        + nama
-                        + ".";
-    }
-
-    StringBuilder pesan =
-            new StringBuilder();
-
-    pesan.append(
-            "🏍️ RR MOTOR\n\n"
-    );
-
-    pesan.append(
-            sapaan
-    ).append("\n\n");
-
-    pesan.append(
-            "Sudah "
-    )
-            .append(jumlahBulan)
-            .append(
-                    " bulan sejak terakhir ganti oli di RR MOTOR."
-            )
-            .append("\n\n");
-
-    pesan.append(
-            "Kami mengingatkan untuk melakukan pengecekan atau pergantian oli motor."
-    ).append("\n\n");
-
-    if (!nopol.isEmpty()) {
-
-        pesan.append(
-                "Nopol: "
-        )
-                .append(nopol)
-                .append("\n");
-    }
-
-    if (!mesin.isEmpty()) {
-
-        pesan.append(
-                "Nomor mesin: "
-        )
-                .append(mesin)
-                .append("\n");
-    }
-
-    if (!nopol.isEmpty() ||
-            !mesin.isEmpty()) {
-
-        pesan.append("\n");
-    }
-
-    if (!km.isEmpty()) {
+        Cursor cursor = null;
 
         try {
 
-            long angkaKm =
-                    Long.parseLong(
-                            km.replace(
-                                    ".",
-                                    ""
-                            )
-                    );
-
-            long maksimal =
-                    hitungKelipatanBerikutnya(
-                            angkaKm,
-                            1500
-                    );
-
-            long palingLambat =
-                    hitungKelipatanBerikutnya(
-                            angkaKm,
-                            2000
-                    );
-
-            pesan.append(
-                    "KM terakhir: "
-            )
-                    .append(
-                            formatKm(angkaKm)
-                    )
-                    .append(
-                            " KM\n"
-                    );
-
-            pesan.append(
-                    "Maksimal ganti oli: "
-            )
-                    .append(
-                            formatKm(maksimal)
-                    )
-                    .append(
-                            " KM\n"
-                    );
-
-            pesan.append(
-                    "Paling lambat: "
-            )
-                    .append(
-                            formatKm(palingLambat)
-                    )
-                    .append(
-                            " KM\n\n"
-                    );
-
-        } catch (Exception ignored) {
-        }
-    }
-
-    pesan.append(
-            "Pengecekan oli GRATIS."
-    ).append("\n\n");
-
-    pesan.append(
-            "Terima kasih telah mempercayakan perawatan motor Anda kepada RR MOTOR."
-    );
-
-    return pesan.toString();
-}
-
-// =====================================================
-// TANGGAL REMINDER
-// =====================================================
-
-private long hitungTanggalReminder(
-        String tanggal,
-        int jumlahBulan
-) {
-
-    try {
-
-        SimpleDateFormat format =
-                new SimpleDateFormat(
-                        "dd-MM-yyyy",
-                        Locale.getDefault()
-                );
-
-        format.setLenient(false);
-
-        Date tanggalDate =
-                format.parse(tanggal);
-
-        if (tanggalDate == null) {
-            return 0;
-        }
-
-        Calendar kalender =
-                Calendar.getInstance();
-
-        kalender.setTime(
-                tanggalDate
-        );
-
-        kalender.add(
-                Calendar.MONTH,
-                jumlahBulan
-        );
-
-        kalender.set(
-                Calendar.HOUR_OF_DAY,
-                9
-        );
-
-        kalender.set(
-                Calendar.MINUTE,
-                0
-        );
-
-        kalender.set(
-                Calendar.SECOND,
-                0
-        );
-
-        kalender.set(
-                Calendar.MILLISECOND,
-                0
-        );
-
-        return kalender.getTimeInMillis();
-
-    } catch (Exception e) {
-
-        return 0;
-    }
-}
-
-// =====================================================
-// JADWALKAN REMINDER
-// =====================================================
-
-private void jadwalkanReminder(
-        long waktu,
-        String documentId,
-        String nama,
-        String wa,
-        String pesan
-) {
-
-    AlarmManager alarm =
-            (AlarmManager)
-                    getSystemService(
-                            ALARM_SERVICE
-                    );
-
-    if (alarm == null) {
-        return;
-    }
-
-    Intent intent =
-            new Intent(
-                    this,
-                    ReminderReceiver.class
+            cursor = getContentResolver().query(
+                    contactUri,
+                    new String[]{
+                            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                            ContactsContract.CommonDataKinds.Phone.NUMBER
+                    },
+                    null,
+                    null,
+                    null
             );
 
-    intent.putExtra(
-            "documentId",
-            documentId
-    );
+            if (cursor != null && cursor.moveToFirst()) {
 
-    intent.putExtra(
-            "nama",
-            nama
-    );
+                int namaIndex =
+                        cursor.getColumnIndex(
+                                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME
+                        );
 
-    intent.putExtra(
-            "wa",
-            wa
-    );
+                int nomorIndex =
+                        cursor.getColumnIndex(
+                                ContactsContract.CommonDataKinds.Phone.NUMBER
+                        );
 
-    intent.putExtra(
-            "pesan",
-            pesan
-    );
-
-    int requestCode =
-            Math.abs(
-                    documentId.hashCode()
-            );
-
-    if (requestCode == 0) {
-        requestCode = 1;
-    }
-
-    PendingIntent pending =
-            PendingIntent.getBroadcast(
-                    this,
-                    requestCode,
-                    intent,
-                    PendingIntent.FLAG_UPDATE_CURRENT
-                            | PendingIntent.FLAG_IMMUTABLE
-            );
-
-    alarm.cancel(pending);
-
-    try {
-
-        if (Build.VERSION.SDK_INT >=
-                Build.VERSION_CODES.S) {
-
-            if (!alarm.canScheduleExactAlarms()) {
-
-                try {
-
-                    Intent settingsIntent =
-                            new Intent(
-                                    Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM
-                            );
-
-                    settingsIntent.setData(
-                            Uri.parse(
-                                    "package:"
-                                            + getPackageName()
-                            )
+                if (namaIndex >= 0) {
+                    etNama.setText(
+                            cursor.getString(namaIndex)
                     );
-
-                    startActivity(
-                            settingsIntent
-                    );
-
-                } catch (Exception ignored) {
                 }
 
-                alarm.setAndAllowWhileIdle(
-                        AlarmManager.RTC_WAKEUP,
-                        waktu,
-                        pending
-                );
-
-                return;
+                if (nomorIndex >= 0) {
+                    etWhatsapp.setText(
+                            bersihkanNomor(
+                                    cursor.getString(nomorIndex)
+                            )
+                    );
+                }
             }
 
-            alarm.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    waktu,
-                    pending
-            );
-
-        } else if (Build.VERSION.SDK_INT >=
-                Build.VERSION_CODES.M) {
-
-            alarm.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    waktu,
-                    pending
-            );
-
-        } else {
-
-            alarm.setExact(
-                    AlarmManager.RTC_WAKEUP,
-                    waktu,
-                    pending
-            );
-        }
-
-    } catch (SecurityException e) {
-
-        alarm.setAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                waktu,
-                pending
-        );
-    }
-}
-
-// =====================================================
-// WHATSAPP
-// =====================================================
-
-private void bukaWhatsAppDariNotifikasi(
-        String nomor,
-        String pesan
-) {
-
-    try {
-
-        String nomorBersih =
-                nomor.replaceAll(
-                        "[^0-9]",
-                        ""
-                );
-
-        if (nomorBersih.startsWith("0")) {
-
-            nomorBersih =
-                    "62"
-                            + nomorBersih.substring(1);
-        }
-
-        if (nomorBersih.isEmpty()) {
+        } catch (Exception e) {
 
             Toast.makeText(
                     this,
-                    "Nomor WhatsApp tidak valid.",
-                    Toast.LENGTH_LONG
+                    "Gagal membaca kontak.",
+                    Toast.LENGTH_SHORT
+            ).show();
+
+        } finally {
+
+            if (cursor != null) {
+                cursor.close();
+            }
+        }
+    }
+
+    private String bersihkanNomor(String nomor) {
+
+        if (nomor == null) {
+            return "";
+        }
+
+        nomor = nomor.replaceAll(
+                "[^0-9+]",
+                ""
+        );
+
+        if (nomor.startsWith("+62")) {
+            nomor = "0" + nomor.substring(3);
+        }
+
+        if (nomor.startsWith("62")) {
+            nomor = "0" + nomor.substring(2);
+        }
+
+        return nomor;
+    }
+
+    // ============================================================
+    // SIMPAN
+    // ============================================================
+
+    private void simpanData() {
+
+        String nama =
+                etNama.getText().toString().trim();
+
+        String nopol =
+                etNopol.getText().toString().trim();
+
+        String nomorMesin =
+                etNomorMesin.getText().toString().trim();
+
+        String km =
+                etKm.getText().toString().trim();
+
+        String whatsapp =
+                bersihkanNomor(
+                        etWhatsapp.getText().toString().trim()
+                );
+
+        String tanggalInput =
+                etTanggal.getText().toString().trim();
+
+        if (whatsapp.isEmpty()) {
+
+            etWhatsapp.requestFocus();
+
+            Toast.makeText(
+                    this,
+                    "Nomor WhatsApp wajib diisi.",
+                    Toast.LENGTH_SHORT
             ).show();
 
             return;
         }
 
-        if (pesan == null) {
-            pesan = "";
+        if (tanggalInput.isEmpty()) {
+
+            Toast.makeText(
+                    this,
+                    "Tanggal wajib diisi.",
+                    Toast.LENGTH_SHORT
+            ).show();
+
+            return;
         }
 
-        String encoded =
-                URLEncoder.encode(
-                        pesan,
-                        "UTF-8"
-                );
-
-        Intent intent =
-                new Intent(
-                        Intent.ACTION_VIEW,
-                        Uri.parse(
-                                "https://wa.me/"
-                                        + nomorBersih
-                                        + "?text="
-                                        + encoded
-                        )
-                );
-
-        startActivity(intent);
-
-    } catch (Exception e) {
-
-        Toast.makeText(
-                this,
-                "WhatsApp tidak dapat dibuka.",
-                Toast.LENGTH_LONG
-        ).show();
-    }
-}
-
-// =====================================================
-// DATA BARU
-// =====================================================
-
-private void dataBaru() {
-
-    namaInput.setText("");
-    nopolInput.setText("");
-    mesinInput.setText("");
-    kmInput.setText("");
-    waInput.setText("");
-    tanggalInput.setText("");
-
-    tanggalTerpilih = "";
-
-    jatuhTempoSpinner.setSelection(0);
-
-    hasilKmText.setText("");
-
-    simpanButton.setEnabled(true);
-
-    namaInput.requestFocus();
-
-    Toast.makeText(
-            this,
-            "Form data baru siap diisi.",
-            Toast.LENGTH_SHORT
-    ).show();
-}
-
-// =====================================================
-// CEK REMINDER LAMA
-// =====================================================
-
-private void cekReminderBelumTerkirim() {
-
-    if (auth.getCurrentUser() == null) {
-        return;
-    }
-
-    long sekarang =
-            System.currentTimeMillis();
-
-    db.collection("reminders")
-            .whereEqualTo(
-                    "reminderTerkirim",
-                    false
-            )
-            .get()
-            .addOnSuccessListener(
-                    querySnapshot -> {
-
-                        for (
-                                DocumentSnapshot doc :
-                                querySnapshot.getDocuments()
-                        ) {
-
-                            Long waktuReminder =
-                                    doc.getLong(
-                                            "waktuReminder"
-                                    );
-
-                            if (waktuReminder == null) {
-                                continue;
-                            }
-
-                            if (waktuReminder <= sekarang) {
-
-                                String documentId =
-                                        doc.getId();
-
-                                String nama =
-                                        doc.getString(
-                                                "nama"
-                                        );
-
-                                String wa =
-                                        doc.getString(
-                                                "whatsapp"
-                                        );
-
-                                String pesan =
-                                        doc.getString(
-                                                "pesanWhatsApp"
-                                        );
-
-                                if (nama == null ||
-                                        nama.trim().isEmpty()) {
-
-                                    nama = "Bapak/Ibu";
-                                }
-
-                                if (wa == null) {
-                                    wa = "";
-                                }
-
-                                if (pesan == null ||
-                                        pesan.trim().isEmpty()) {
-
-                                    pesan =
-                                            "Waktunya melakukan pengecekan atau pergantian oli motor di RR MOTOR.";
-                                }
-
-                                Intent reminderIntent =
-                                        new Intent(
-                                                MainActivity.this,
-                                                ReminderReceiver.class
-                                        );
-
-                                reminderIntent.putExtra(
-                                        "documentId",
-                                        documentId
-                                );
-
-                                reminderIntent.putExtra(
-                                        "nama",
-                                        nama
-                                );
-
-                                reminderIntent.putExtra(
-                                        "wa",
-                                        wa
-                                );
-
-                                reminderIntent.putExtra(
-                                        "pesan",
-                                        pesan
-                                );
-
-                                sendBroadcast(
-                                        reminderIntent
-                                );
-                            }
-                        }
-                    }
-            )
-            .addOnFailureListener(
-                    e -> {
-                        // Tidak mengganggu aplikasi.
-                    }
-            );
-}
-
-// =====================================================
-// RIWAYAT
-// =====================================================
-
-private void tampilkanRiwayat() {
-
-    if (auth.getCurrentUser() == null) {
-
-        kembaliKeLogin();
-
-        return;
-    }
-
-    String[] pilihanFilter = {
-            "SEMUA",
-            "BELUM TERKIRIM",
-            "TERKIRIM"
-    };
-
-    new AlertDialog.Builder(this)
-            .setTitle(
-                    "📋 RIWAYAT REMINDER"
-            )
-            .setItems(
-                    pilihanFilter,
-                    (dialog, which) -> {
-
-                        if (which == 0) {
-
-                            ambilRiwayat(
-                                    "SEMUA"
-                            );
-
-                        } else if (which == 1) {
-
-                            ambilRiwayat(
-                                    "BELUM TERKIRIM"
-                            );
-
-                        } else {
-
-                            ambilRiwayat(
-                                    "TERKIRIM"
-                            );
-                        }
-                    }
-            )
-            .setNegativeButton(
-                    "BATAL",
-                    null
-            )
-            .show();
-}
-
-private void ambilRiwayat(
-        String filter
-) {
-
-    Query query =
-            db.collection("reminders")
-                    .orderBy(
-                            "waktuSimpan",
-                            Query.Direction.DESCENDING
-                    )
-                    .limit(100);
-
-    if (filter.equals(
-            "BELUM TERKIRIM"
-    )) {
-
-        query =
-                db.collection("reminders")
-                        .whereEqualTo(
-                                "reminderTerkirim",
-                                false
-                        )
-                        .orderBy(
-                                "waktuSimpan",
-                                Query.Direction.DESCENDING
-                        )
-                        .limit(100);
-    }
-
-    if (filter.equals(
-            "TERKIRIM"
-    )) {
-
-        query =
-                db.collection("reminders")
-                        .whereEqualTo(
-                                "reminderTerkirim",
-                                true
-                        )
-                        .orderBy(
-                                "waktuSimpan",
-                                Query.Direction.DESCENDING
-                        )
-                        .limit(100);
-    }
-
-    query.get()
-            .addOnSuccessListener(
-                    querySnapshot -> {
-
-                        ArrayList<DocumentSnapshot>
-                                dokumen =
-                                new ArrayList<>();
-
-                        ArrayList<String>
-                                daftar =
-                                new ArrayList<>();
-
-                        long sekarang =
-                                System.currentTimeMillis();
-
-                        for (
-                                DocumentSnapshot doc :
-                                querySnapshot.getDocuments()
-                        ) {
-
-                            dokumen.add(doc);
-
-                            String nama =
-                                    doc.getString(
-                                            "nama"
-                                    );
-
-                            String wa =
-                                    doc.getString(
-                                            "whatsapp"
-                                    );
-
-                            String tanggal =
-                                    doc.getString(
-                                            "tanggalInput"
-                                    );
-
-                            Boolean terkirim =
-                                    doc.getBoolean(
-                                            "reminderTerkirim"
-                                    );
-
-                            Long waktuReminder =
-                                    doc.getLong(
-                                            "waktuReminder"
-                                    );
-
-                            if (nama == null ||
-                                    nama.trim().isEmpty()) {
-
-                                nama = "Bapak/Ibu";
-                            }
-
-                            if (wa == null ||
-                                    wa.trim().isEmpty()) {
-
-                                wa = "-";
-                            }
-
-                            if (tanggal == null ||
-                                    tanggal.trim().isEmpty()) {
-
-                                tanggal = "-";
-                            }
-
-                            String status =
-                                    Boolean.TRUE.equals(
-                                            terkirim
-                                    )
-                                            ? "TERKIRIM"
-                                            : "BELUM TERKIRIM";
-
-                            String tambahan =
-                                    "";
-
-                            if (!Boolean.TRUE.equals(
-                                    terkirim
-                            )
-                                    && waktuReminder != null
-                                    && waktuReminder <= sekarang) {
-
-                                tambahan =
-                                        "\n⚠️ SUDAH LEWAT TEMPO";
-                            }
-
-                            String teks =
-                                    nama
-                                            + "\nWA: "
-                                            + wa
-                                            + "\nTanggal input: "
-                                            + tanggal
-                                            + "\nStatus: "
-                                            + status
-                                            + tambahan;
-
-                            daftar.add(teks);
-                        }
-
-                        if (daftar.isEmpty()) {
-
-                            new AlertDialog.Builder(
-                                    this
-                            )
-                                    .setTitle(
-                                            "RIWAYAT "
-                                                    + filter
-                                    )
-                                    .setMessage(
-                                            "Tidak ada data."
-                                    )
-                                    .setPositiveButton(
-                                            "TUTUP",
-                                            null
-                                    )
-                                    .show();
-
-                            return;
-                        }
-
-                        String[] array =
-                                daftar.toArray(
-                                        new String[0]
-                                );
-
-                        new AlertDialog.Builder(
-                                this
-                        )
-                                .setTitle(
-                                        "RIWAYAT - "
-                                                + filter
-                                )
-                                .setItems(
-                                        array,
-                                        (dialog, which) -> {
-
-                                            if (which >= 0 &&
-                                                    which < dokumen.size()) {
-
-                                                tampilkanDetailRiwayat(
-                                                        dokumen.get(which)
-                                                );
-                                            }
-                                        }
-                                )
-                                .setPositiveButton(
-                                        "TUTUP",
-                                        null
-                                )
-                                .show();
-                    }
-            )
-            .addOnFailureListener(
-                    e -> {
-
-                        Toast.makeText(
-                                this,
-                                "Gagal mengambil riwayat: "
-                                        + e.getMessage(),
-                                Toast.LENGTH_LONG
-                        ).show();
-                    }
-            );
-}
-
-// =====================================================
-// MENU HAPUS
-// =====================================================
-
-private void tampilkanMenuHapusRiwayat() {
-
-    String[] pilihan = {
-            "HAPUS SATU DATA",
-            "HAPUS SEMUA TERKIRIM"
-    };
-
-    new AlertDialog.Builder(this)
-            .setTitle(
-                    "🗑️ HAPUS RIWAYAT"
-            )
-            .setItems(
-                    pilihan,
-                    (dialog, which) -> {
-
-                        if (which == 0) {
-
-                            tampilkanPilihRiwayatUntukDihapus();
-
-                        } else {
-
-                            konfirmasiHapusSemuaTerkirim();
-                        }
-                    }
-            )
-            .setNegativeButton(
-                    "BATAL",
-                    null
-            )
-            .show();
-}
-
-// =====================================================
-// HAPUS SATU DATA
-// BISA TERKIRIM ATAU BELUM TERKIRIM
-// =====================================================
-
-private void tampilkanPilihRiwayatUntukDihapus() {
-
-    db.collection("reminders")
-            .orderBy(
-                    "waktuSimpan",
-                    Query.Direction.DESCENDING
-            )
-            .limit(100)
-            .get()
-            .addOnSuccessListener(
-                    querySnapshot -> {
-
-                        if (querySnapshot.isEmpty()) {
-
-                            new AlertDialog.Builder(this)
-                                    .setTitle(
-                                            "🗑️ HAPUS SATU"
-                                    )
-                                    .setMessage(
-                                            "Tidak ada riwayat."
-                                    )
-                                    .setPositiveButton(
-                                            "OK",
-                                            null
-                                    )
-                                    .show();
-
-                            return;
-                        }
-
-                        ArrayList<DocumentSnapshot>
-                                dokumen =
-                                new ArrayList<>();
-
-                        ArrayList<String>
-                                daftar =
-                                new ArrayList<>();
-
-                        long sekarang =
-                                System.currentTimeMillis();
-
-                        for (
-                                DocumentSnapshot doc :
-                                querySnapshot.getDocuments()
-                        ) {
-
-                            dokumen.add(doc);
-
-                            String nama =
-                                    doc.getString(
-                                            "nama"
-                                    );
-
-                            String wa =
-                                    doc.getString(
-                                            "whatsapp"
-                                    );
-
-                            String tanggal =
-                                    doc.getString(
-                                            "tanggalInput"
-                                    );
-
-                            Boolean terkirim =
-                                    doc.getBoolean(
-                                            "reminderTerkirim"
-                                    );
-
-                            Long waktuReminder =
-                                    doc.getLong(
-                                            "waktuReminder"
-                                    );
-
-                            if (nama == null ||
-                                    nama.trim().isEmpty()) {
-
-                                nama =
-                                        "Bapak/Ibu";
-                            }
-
-                            if (wa == null ||
-                                    wa.trim().isEmpty()) {
-
-                                wa = "-";
-                            }
-
-                            if (tanggal == null ||
-                                    tanggal.trim().isEmpty()) {
-
-                                tanggal = "-";
-                            }
-
-                            String status =
-                                    Boolean.TRUE.equals(
-                                            terkirim
-                                    )
-                                            ? "TERKIRIM"
-                                            : "BELUM TERKIRIM";
-
-                            String lewat =
-                                    "";
-
-                            if (!Boolean.TRUE.equals(
-                                    terkirim
-                            )
-                                    && waktuReminder != null
-                                    && waktuReminder <= sekarang) {
-
-                                lewat =
-                                        "\n⚠️ SUDAH LEWAT TEMPO";
-                            }
-
-                            daftar.add(
-                                    nama
-                                            + "\nWA: "
-                                            + wa
-                                            + "\nTanggal: "
-                                            + tanggal
-                                            + "\nStatus: "
-                                            + status
-                                            + lewat
-                            );
-                        }
-
-                        String[] array =
-                                daftar.toArray(
-                                        new String[0]
-                                );
-
-                        new AlertDialog.Builder(this)
-                                .setTitle(
-                                        "🗑️ PILIH DATA YANG DIHAPUS"
-                                )
-                                .setItems(
-                                        array,
-                                        (dialog, which) -> {
-
-                                            if (which >= 0 &&
-                                                    which < dokumen.size()) {
-
-                                                konfirmasiHapusSatu(
-                                                        dokumen.get(which)
-                                                );
-                                            }
-                                        }
-                                )
-                                .setNegativeButton(
-                                        "BATAL",
-                                        null
-                                )
-                                .show();
-                    }
-            )
-            .addOnFailureListener(
-                    e -> {
-
-                        Toast.makeText(
-                                this,
-                                "Gagal mengambil data: "
-                                        + e.getMessage(),
-                                Toast.LENGTH_LONG
-                        ).show();
-                    }
-            );
-}
-
-private void konfirmasiHapusSatu(
-        DocumentSnapshot document
-) {
-
-    String nama =
-            document.getString("nama");
-
-    Boolean terkirim =
-            document.getBoolean(
-                    "reminderTerkirim"
-            );
-
-    Long waktuReminder =
-            document.getLong(
-                    "waktuReminder"
-            );
-
-    if (nama == null ||
-            nama.trim().isEmpty()) {
-
-        nama = "Bapak/Ibu";
-    }
-
-    final String documentId =
-            document.getId();
-
-    String status =
-            Boolean.TRUE.equals(
-                    terkirim
-            )
-                    ? "TERKIRIM"
-                    : "BELUM TERKIRIM";
-
-    String tambahan = "";
-
-    if (!Boolean.TRUE.equals(terkirim)
-            && waktuReminder != null
-            && waktuReminder <= System.currentTimeMillis()) {
-
-        tambahan =
-                "\nReminder ini sudah lewat tempo.";
-    }
-
-    new AlertDialog.Builder(this)
-            .setTitle(
-                    "🗑️ HAPUS DATA?"
-            )
-            .setMessage(
-                    "Hapus riwayat:\n\n"
-                            + nama
-                            + "\n\nStatus: "
-                            + status
-                            + tambahan
-                            + "\n\nData akan dihapus permanen."
-            )
-            .setNegativeButton(
-                    "BATAL",
-                    null
-            )
-            .setPositiveButton(
-                    "HAPUS",
-                    (dialog, which) -> {
-
-                        db.collection("reminders")
-                                .document(documentId)
-                                .delete()
-                                .addOnSuccessListener(
-                                        unused -> {
-
-                                            Toast.makeText(
-                                                    this,
-                                                    "Riwayat berhasil dihapus.",
-                                                    Toast.LENGTH_SHORT
-                                            ).show();
-                                        }
-                                )
-                                .addOnFailureListener(
-                                        e -> {
-
-                                            Toast.makeText(
-                                                    this,
-                                                    "Gagal menghapus: "
-                                                            + e.getMessage(),
-                                                    Toast.LENGTH_LONG
-                                            ).show();
-                                        }
-                                );
-                    }
-            )
-            .show();
-}
-
-// =====================================================
-// HAPUS SEMUA TERKIRIM
-// =====================================================
-
-private void konfirmasiHapusSemuaTerkirim() {
-
-    new AlertDialog.Builder(this)
-            .setTitle(
-                    "🗑️ HAPUS SEMUA TERKIRIM?"
-            )
-            .setMessage(
-                    "Semua riwayat yang sudah TERKIRIM "
-                            + "akan dihapus sekaligus.\n\n"
-                            + "Data BELUM TERKIRIM tidak akan dihapus."
-            )
-            .setNegativeButton(
-                    "BATAL",
-                    null
-            )
-            .setPositiveButton(
-                    "HAPUS SEMUA",
-                    (dialog, which) -> {
-
-                        hapusSemuaReminderTerkirim();
-                    }
-            )
-            .show();
-}
-
-private void hapusSemuaReminderTerkirim() {
-
-    db.collection("reminders")
-            .whereEqualTo(
-                    "reminderTerkirim",
-                    true
-            )
-            .get()
-            .addOnSuccessListener(
-                    querySnapshot -> {
-
-                        if (querySnapshot.isEmpty()) {
-
-                            new AlertDialog.Builder(this)
-                                    .setMessage(
-                                            "Tidak ada riwayat terkirim yang dapat dihapus."
-                                    )
-                                    .setPositiveButton(
-                                            "OK",
-                                            null
-                                    )
-                                    .show();
-
-                            return;
-                        }
-
-                        WriteBatch batch =
-                                db.batch();
-
-                        for (
-                                DocumentSnapshot document :
-                                querySnapshot.getDocuments()
-                        ) {
-
-                            batch.delete(
-                                    document.getReference()
-                            );
-                        }
-
-                        batch.commit()
-                                .addOnSuccessListener(
-                                        unused -> {
-
-                                            Toast.makeText(
-                                                    this,
-                                                    "Semua riwayat terkirim berhasil dihapus.",
-                                                    Toast.LENGTH_LONG
-                                            ).show();
-                                        }
-                                )
-                                .addOnFailureListener(
-                                        e -> {
-
-                                            Toast.makeText(
-                                                    this,
-                                                    "Gagal menghapus semua: "
-                                                            + e.getMessage(),
-                                                    Toast.LENGTH_LONG
-                                            ).show();
-                                        }
-                                );
-                    }
-            )
-            .addOnFailureListener(
-                    e -> {
-
-                        Toast.makeText(
-                                this,
-                                "Gagal mengambil riwayat terkirim: "
-                                        + e.getMessage(),
-                                Toast.LENGTH_LONG
-                        ).show();
-                    });
-}
-
-// =====================================================
-// DETAIL RIWAYAT
-// =====================================================
-
-private void tampilkanDetailRiwayat(
-        DocumentSnapshot doc
-) {
-
-    String nama =
-            doc.getString("nama");
-
-    String nopol =
-            doc.getString("nopol");
-
-    String mesin =
-            doc.getString("nomorMesin");
-
-    String km =
-            doc.getString("kmTerakhir");
-
-    String wa =
-            doc.getString("whatsapp");
-
-    String tanggal =
-            doc.getString("tanggalInput");
-
-    String jatuhTempo =
-            doc.getString("jatuhTempo");
-
-    String pesan =
-            doc.getString("pesanWhatsApp");
-
-    Boolean terkirim =
-            doc.getBoolean(
-                    "reminderTerkirim"
-            );
-
-    Long waktuReminder =
-            doc.getLong(
-                    "waktuReminder"
-            );
-
-    if (nama == null ||
-            nama.trim().isEmpty()) {
-
-        nama = "Bapak/Ibu";
-    }
-
-    if (nopol == null ||
-            nopol.trim().isEmpty()) {
-
-        nopol = "-";
-    }
-
-    if (mesin == null ||
-            mesin.trim().isEmpty()) {
-
-        mesin = "-";
-    }
-
-    if (km == null ||
-            km.trim().isEmpty()) {
-
-        km = "-";
-    }
-
-    if (wa == null ||
-            wa.trim().isEmpty()) {
-
-        wa = "-";
-    }
-
-    if (tanggal == null ||
-            tanggal.trim().isEmpty()) {
-
-        tanggal = "-";
-    }
-
-    if (jatuhTempo == null ||
-            jatuhTempo.trim().isEmpty()) {
-
-        jatuhTempo = "-";
-    }
-
-    String status =
-            Boolean.TRUE.equals(
-                    terkirim
-            )
-                    ? "TERKIRIM"
-                    : "BELUM TERKIRIM";
-
-    StringBuilder detail =
-            new StringBuilder();
-
-    detail.append(
-            "Nama: "
-    ).append(nama)
-            .append("\n\n");
-
-    detail.append(
-            "WhatsApp: "
-    ).append(wa)
-            .append("\n\n");
-
-    detail.append(
-            "Nopol: "
-    ).append(nopol)
-            .append("\n\n");
-
-    detail.append(
-            "Nomor mesin: "
-    ).append(mesin)
-            .append("\n\n");
-
-    detail.append(
-            "Tanggal input: "
-    ).append(tanggal)
-            .append("\n\n");
-
-    detail.append(
-            "Jatuh tempo: "
-    ).append(jatuhTempo)
-            .append("\n\n");
-
-    detail.append(
-            "KM terakhir: "
-    ).append(km)
-            .append("\n");
-
-    if (!km.equals("-")) {
+        Date tanggal;
 
         try {
 
-            long angkaKm =
-                    Long.parseLong(
-                            km.replace(
-                                    ".",
-                                    ""
+            tanggal =
+                    tanggalFormat.parse(
+                            tanggalInput
+                    );
+
+        } catch (ParseException e) {
+
+            Toast.makeText(
+                    this,
+                    "Format tanggal tidak valid.",
+                    Toast.LENGTH_SHORT
+            ).show();
+
+            return;
+        }
+
+        if (tanggal == null) {
+            return;
+        }
+
+        int bulan =
+                spinnerBulan.getSelectedItemPosition() == 0
+                        ? 1
+                        : 2;
+
+        Calendar jatuhTempo =
+                Calendar.getInstance();
+
+        jatuhTempo.setTime(tanggal);
+
+        jatuhTempo.add(
+                Calendar.MONTH,
+                bulan
+        );
+
+        String tanggalJatuhTempo =
+                tanggalFormat.format(
+                        jatuhTempo.getTime()
+                );
+
+        String pesan =
+                buatPesanWhatsApp(
+                        nama,
+                        nopol,
+                        nomorMesin,
+                        km,
+                        bulan
+                );
+
+        long waktuReminder =
+                setJam09(
+                        jatuhTempo
+                );
+
+        String id =
+                UUID.randomUUID().toString();
+
+        ReminderData data =
+                new ReminderData(
+                        id,
+                        nama,
+                        nopol,
+                        nomorMesin,
+                        km,
+                        whatsapp,
+                        tanggalInput,
+                        tanggalJatuhTempo,
+                        pesan,
+                        waktuReminder,
+                        false,
+                        0,
+                        System.currentTimeMillis()
+                );
+
+        boolean berhasil =
+                localDataStore.add(data);
+
+        if (!berhasil) {
+
+            Toast.makeText(
+                    this,
+                    "Data gagal disimpan.",
+                    Toast.LENGTH_SHORT
+            ).show();
+
+            return;
+        }
+
+        jadwalkanReminder(data);
+
+        btnSimpan.setEnabled(false);
+
+        Toast.makeText(
+                this,
+                "✅ Data tersimpan.\nReminder: "
+                        + tanggalJatuhTempo
+                        + " jam 09:00",
+                Toast.LENGTH_LONG
+        ).show();
+
+        backupKeGoogleDriveOtomatis();
+    }
+
+    private long setJam09(Calendar calendar) {
+
+        Calendar waktu =
+                (Calendar) calendar.clone();
+
+        waktu.set(
+                Calendar.HOUR_OF_DAY,
+                9
+        );
+
+        waktu.set(
+                Calendar.MINUTE,
+                0
+        );
+
+        waktu.set(
+                Calendar.SECOND,
+                0
+        );
+
+        waktu.set(
+                Calendar.MILLISECOND,
+                0
+        );
+
+        return waktu.getTimeInMillis();
+    }
+
+    private String buatPesanWhatsApp(
+            String nama,
+            String nopol,
+            String nomorMesin,
+            String km,
+            int bulan
+    ) {
+
+        StringBuilder pesan =
+                new StringBuilder();
+
+        pesan.append(
+                "🏍️ *RR MOTOR*\n"
+        );
+
+        pesan.append(
+                "Pengingat Ganti Oli\n\n"
+        );
+
+        if (!nama.isEmpty()) {
+
+            pesan.append(
+                    "Halo "
+                            + nama
+                            + ",\n\n"
+            );
+        } else {
+
+            pesan.append(
+                    "Halo,\n\n"
+            );
+        }
+
+        pesan.append(
+                "Sudah waktunya melakukan "
+                        + "penggantian oli motor Anda.\n"
+        );
+
+        pesan.append(
+                "Interval pengingat: "
+                        + bulan
+                        + " bulan.\n"
+        );
+
+        if (!nopol.isEmpty()) {
+
+            pesan.append(
+                    "Nopol: "
+                            + nopol
+                            + "\n"
+            );
+        }
+
+        if (!nomorMesin.isEmpty()) {
+
+            pesan.append(
+                    "Nomor mesin: "
+                            + nomorMesin
+                            + "\n"
+            );
+        }
+
+        if (!km.isEmpty()) {
+
+            try {
+
+                long nilaiKm =
+                        Long.parseLong(km);
+
+                pesan.append(
+                        "Maksimal ganti oli: "
+                                + (nilaiKm + 1500)
+                                + " KM\n"
+                );
+
+                pesan.append(
+                        "Paling lambat: "
+                                + (nilaiKm + 2000)
+                                + " KM\n"
+                );
+
+            } catch (Exception ignored) {
+            }
+        }
+
+        pesan.append(
+                "\nPengecekan oli *GRATIS*.\n\n"
+        );
+
+        pesan.append(
+                "Silakan datang ke *RR MOTOR* "
+                        + "untuk pengecekan dan penggantian oli.\n\n"
+        );
+
+        pesan.append(
+                "Terima kasih 🙏"
+        );
+
+        return pesan.toString();
+    }
+
+    // ============================================================
+    // ALARM
+    // ============================================================
+
+    private void jadwalkanReminder(
+            ReminderData data
+    ) {
+
+        AlarmManager alarmManager =
+                (AlarmManager)
+                        getSystemService(
+                                ALARM_SERVICE
+                        );
+
+        if (alarmManager == null) {
+            return;
+        }
+
+        Intent intent =
+                new Intent(
+                        this,
+                        ReminderReceiver.class
+                );
+
+        intent.putExtra(
+                "documentId",
+                data.getId()
+        );
+
+        intent.putExtra(
+                "nama",
+                data.getNama()
+        );
+
+        intent.putExtra(
+                "wa",
+                data.getWhatsapp()
+        );
+
+        intent.putExtra(
+                "pesan",
+                data.getPesanWhatsApp()
+        );
+
+        int requestCode =
+                data.getId().hashCode();
+
+        PendingIntent pendingIntent =
+                PendingIntent.getBroadcast(
+                        this,
+                        requestCode,
+                        intent,
+                        PendingIntent.FLAG_UPDATE_CURRENT
+                                | PendingIntent.FLAG_IMMUTABLE
+                );
+
+        long waktu =
+                data.getWaktuReminder();
+
+        if (waktu <= System.currentTimeMillis()) {
+            return;
+        }
+
+        try {
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+
+                if (alarmManager.canScheduleExactAlarms()) {
+
+                    alarmManager.setExactAndAllowWhileIdle(
+                            AlarmManager.RTC_WAKEUP,
+                            waktu,
+                            pendingIntent
+                    );
+
+                } else {
+
+                    alarmManager.setAndAllowWhileIdle(
+                            AlarmManager.RTC_WAKEUP,
+                            waktu,
+                            pendingIntent
+                    );
+
+                    Toast.makeText(
+                            this,
+                            "Aktifkan izin Alarm & pengingat agar reminder lebih tepat jam 09:00.",
+                            Toast.LENGTH_LONG
+                    ).show();
+                }
+
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+
+                alarmManager.setExactAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        waktu,
+                        pendingIntent
+                );
+
+            } else {
+
+                alarmManager.setExact(
+                        AlarmManager.RTC_WAKEUP,
+                        waktu,
+                        pendingIntent
+                );
+            }
+
+        } catch (SecurityException e) {
+
+            alarmManager.setAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    waktu,
+                    pendingIntent
+            );
+        }
+    }
+
+    private void jadwalkanSemuaReminder() {
+
+        List<ReminderData> semua =
+                localDataStore.getUnsent();
+
+        for (ReminderData data : semua) {
+
+            if (data.getWaktuReminder()
+                    > System.currentTimeMillis()) {
+
+                jadwalkanReminder(data);
+
+            } else {
+
+                Intent intent =
+                        new Intent(
+                                this,
+                                ReminderReceiver.class
+                        );
+
+                intent.putExtra(
+                        "documentId",
+                        data.getId()
+                );
+
+                intent.putExtra(
+                        "nama",
+                        data.getNama()
+                );
+
+                intent.putExtra(
+                        "wa",
+                        data.getWhatsapp()
+                );
+
+                intent.putExtra(
+                        "pesan",
+                        data.getPesanWhatsApp()
+                );
+
+                sendBroadcast(intent);
+            }
+        }
+    }
+
+    private void batalkanReminder(
+            ReminderData data
+    ) {
+
+        AlarmManager alarmManager =
+                (AlarmManager)
+                        getSystemService(
+                                ALARM_SERVICE
+                        );
+
+        if (alarmManager == null) {
+            return;
+        }
+
+        Intent intent =
+                new Intent(
+                        this,
+                        ReminderReceiver.class
+                );
+
+        PendingIntent pendingIntent =
+                PendingIntent.getBroadcast(
+                        this,
+                        data.getId().hashCode(),
+                        intent,
+                        PendingIntent.FLAG_UPDATE_CURRENT
+                                | PendingIntent.FLAG_IMMUTABLE
+                );
+
+        alarmManager.cancel(
+                pendingIntent
+        );
+    }
+
+    // ============================================================
+    // IZIN ALARM
+    // ============================================================
+
+    private void cekIzinAlarm() {
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+
+            AlarmManager alarmManager =
+                    (AlarmManager)
+                            getSystemService(
+                                    ALARM_SERVICE
+                            );
+
+            if (alarmManager != null
+                    && !alarmManager.canScheduleExactAlarms()) {
+
+                // Tidak langsung memaksa.
+                // Alarm tetap memakai fallback.
+            }
+        }
+    }
+
+    // ============================================================
+    // NOTIFIKASI
+    // ============================================================
+
+    private void mintaIzinNotifikasi() {
+
+        if (Build.VERSION.SDK_INT >= 33) {
+
+            if (ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED) {
+
+                notificationPermissionLauncher.launch(
+                        Manifest.permission.POST_NOTIFICATIONS
+                );
+            }
+        }
+    }
+
+    private void prosesIntentNotifikasi() {
+
+        Intent intent = getIntent();
+
+        if (intent == null) {
+            return;
+        }
+
+        boolean dariNotifikasi =
+                intent.getBooleanExtra(
+                        "reminder_dari_notifikasi",
+                        false
+                );
+
+        if (!dariNotifikasi) {
+            return;
+        }
+
+        String wa =
+                intent.getStringExtra(
+                        "reminder_wa"
+                );
+
+        String pesan =
+                intent.getStringExtra(
+                        "reminder_pesan"
+                );
+
+        if (wa == null || wa.trim().isEmpty()) {
+            return;
+        }
+
+        new android.os.Handler().postDelayed(
+                () -> bukaWhatsApp(
+                        wa,
+                        pesan
+                ),
+                700
+        );
+
+        intent.removeExtra(
+                "reminder_dari_notifikasi"
+        );
+    }
+
+    private void bukaWhatsApp(
+            String nomor,
+            String pesan
+    ) {
+
+        try {
+
+            String nomorBersih =
+                    bersihkanNomor(nomor);
+
+            String encoded =
+                    Uri.encode(pesan == null ? "" : pesan);
+
+            Intent intent =
+                    new Intent(
+                            Intent.ACTION_VIEW
+                    );
+
+            intent.setData(
+                    Uri.parse(
+                            "https://wa.me/"
+                                    + nomorBersih.substring(
+                                            nomorBersih.startsWith("0")
+                                                    ? 1
+                                                    : 0
+                                    )
+                                    .replaceFirst(
+                                            "^",
+                                            "62"
+                                    )
+                                    + "?text="
+                                    + encoded
+                    )
+            );
+
+            startActivity(intent);
+
+        } catch (Exception e) {
+
+            Toast.makeText(
+                    this,
+                    "WhatsApp tidak dapat dibuka.",
+                    Toast.LENGTH_SHORT
+            ).show();
+        }
+    }
+
+    // ============================================================
+    // DATA BARU
+    // ============================================================
+
+    private void dataBaru() {
+
+        etNama.setText("");
+        etNopol.setText("");
+        etNomorMesin.setText("");
+        etKm.setText("");
+        etWhatsapp.setText("");
+
+        isiTanggalHariIni();
+
+        spinnerBulan.setSelection(0);
+
+        tvKmInfo.setText("");
+
+        btnSimpan.setEnabled(true);
+
+        etNama.requestFocus();
+    }
+
+    // ============================================================
+    // RIWAYAT
+    // ============================================================
+
+    private void tampilkanRiwayat() {
+
+        final String[] filter = {
+                "SEMUA",
+                "BELUM TERKIRIM",
+                "TERKIRIM"
+        };
+
+        new AlertDialog.Builder(this)
+                .setTitle("📋 RIWAYAT REMINDER")
+                .setItems(
+                        filter,
+                        (dialog, which) -> {
+
+                            if (which == 0) {
+                                tampilkanDaftarRiwayat(
+                                        "SEMUA"
+                                );
+                            } else if (which == 1) {
+                                tampilkanDaftarRiwayat(
+                                        "BELUM TERKIRIM"
+                                );
+                            } else {
+                                tampilkanDaftarRiwayat(
+                                        "TERKIRIM"
+                                );
+                            }
+                        }
+                )
+                .show();
+    }
+
+    private void tampilkanDaftarRiwayat(
+            String jenis
+    ) {
+
+        List<ReminderData> data =
+                localDataStore.getSortedByNewest();
+
+        List<ReminderData> tampil =
+                new ArrayList<>();
+
+        for (ReminderData item : data) {
+
+            if (jenis.equals("SEMUA")) {
+
+                tampil.add(item);
+
+            } else if (
+                    jenis.equals("TERKIRIM")
+                            && item.isReminderTerkirim()
+            ) {
+
+                tampil.add(item);
+
+            } else if (
+                    jenis.equals("BELUM TERKIRIM")
+                            && !item.isReminderTerkirim()
+            ) {
+
+                tampil.add(item);
+            }
+        }
+
+        if (tampil.isEmpty()) {
+
+            Toast.makeText(
+                    this,
+                    "Tidak ada data.",
+                    Toast.LENGTH_SHORT
+            ).show();
+
+            return;
+        }
+
+        String[] daftar =
+                new String[tampil.size()];
+
+        for (int i = 0; i < tampil.size(); i++) {
+
+            ReminderData item =
+                    tampil.get(i);
+
+            String status =
+                    item.isReminderTerkirim()
+                            ? "✅ TERKIRIM"
+                            : "⏳ BELUM TERKIRIM";
+
+            String nama =
+                    item.getNama();
+
+            if (nama == null
+                    || nama.trim().isEmpty()) {
+
+                nama = "(Tanpa nama)";
+            }
+
+            String nopol =
+                    item.getNopol();
+
+            if (nopol == null
+                    || nopol.trim().isEmpty()) {
+
+                nopol = "-";
+            }
+
+            String lewat = "";
+
+            if (!item.isReminderTerkirim()
+                    && item.getWaktuReminder()
+                    < System.currentTimeMillis()) {
+
+                lewat =
+                        "\n⚠️ SUDAH LEWAT TEMPO";
+            }
+
+            daftar[i] =
+                    status
+                            + "\n"
+                            + nama
+                            + "\nNopol: "
+                            + nopol
+                            + "\nJatuh tempo: "
+                            + item.getJatuhTempo()
+                            + lewat;
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle(
+                        "RIWAYAT - "
+                                + jenis
+                )
+                .setItems(
+                        daftar,
+                        (dialog, which) -> {
+
+                            tampilkanDetail(
+                                    tampil.get(which)
+                            );
+                        }
+                )
+                .show();
+    }
+
+    private void tampilkanDetail(
+            ReminderData data
+    ) {
+
+        StringBuilder detail =
+                new StringBuilder();
+
+        detail.append(
+                "Nama: "
+                        + nilai(data.getNama())
+                        + "\n"
+        );
+
+        detail.append(
+                "Nopol: "
+                        + nilai(data.getNopol())
+                        + "\n"
+        );
+
+        detail.append(
+                "Nomor mesin: "
+                        + nilai(data.getNomorMesin())
+                        + "\n"
+        );
+
+        detail.append(
+                "KM terakhir: "
+                        + nilai(data.getKmTerakhir())
+                        + "\n"
+        );
+
+        detail.append(
+                "WhatsApp: "
+                        + nilai(data.getWhatsapp())
+                        + "\n"
+        );
+
+        detail.append(
+                "Tanggal input: "
+                        + nilai(data.getTanggalInput())
+                        + "\n"
+        );
+
+        detail.append(
+                "Jatuh tempo: "
+                        + nilai(data.getJatuhTempo())
+                        + "\n"
+        );
+
+        detail.append(
+                "Status: "
+                        + (
+                        data.isReminderTerkirim()
+                                ? "TERKIRIM"
+                                : "BELUM TERKIRIM"
+                )
+                        + "\n"
+        );
+
+        if (!data.isReminderTerkirim()
+                && data.getWaktuReminder()
+                < System.currentTimeMillis()) {
+
+            detail.append(
+                    "\n⚠️ SUDAH LEWAT TEMPO\n"
+            );
+        }
+
+        detail.append(
+                "\nPesan WhatsApp:\n"
+        );
+
+        detail.append(
+                data.getPesanWhatsApp()
+        );
+
+        AlertDialog dialog =
+                new AlertDialog.Builder(this)
+                        .setTitle("DETAIL REMINDER")
+                        .setMessage(detail.toString())
+                        .setNegativeButton(
+                                "TUTUP",
+                                null
+                        )
+                        .setPositiveButton(
+                                "WHATSAPP",
+                                null
+                        )
+                        .setNeutralButton(
+                                "HAPUS",
+                                null
+                        )
+                        .create();
+
+        dialog.setOnShowListener(
+                d -> {
+
+                    Button wa =
+                            dialog.getButton(
+                                    AlertDialog.BUTTON_POSITIVE
+                            );
+
+                    wa.setOnClickListener(
+                            v -> bukaWhatsApp(
+                                    data.getWhatsapp(),
+                                    data.getPesanWhatsApp()
                             )
                     );
 
-            detail.append(
-                    "Maksimal ganti oli: "
-            ).append(
-                    formatKm(
-                            angkaKm + 1500
-                    )
-            ).append(
-                    " KM\n"
-            );
+                    Button hapus =
+                            dialog.getButton(
+                                    AlertDialog.BUTTON_NEUTRAL
+                            );
 
-            detail.append(
-                    "Paling lambat: "
-            ).append(
-                    formatKm(
-                            angkaKm + 2000
-                    )
-            ).append(
-                    " KM\n"
-            );
+                    hapus.setOnClickListener(
+                            v -> {
 
-        } catch (Exception ignored) {
+                                new AlertDialog.Builder(this)
+                                        .setTitle("Hapus data?")
+                                        .setMessage(
+                                                "Data reminder ini akan dihapus dari HP."
+                                        )
+                                        .setNegativeButton(
+                                                "BATAL",
+                                                null
+                                        )
+                                        .setPositiveButton(
+                                                "HAPUS",
+                                                (dd, ww) -> {
+
+                                                    batalkanReminder(
+                                                            data
+                                                    );
+
+                                                    localDataStore.delete(
+                                                            data.getId()
+                                                    );
+
+                                                    dialog.dismiss();
+
+                                                    backupKeGoogleDriveOtomatis();
+
+                                                    Toast.makeText(
+                                                            this,
+                                                            "Data dihapus.",
+                                                            Toast.LENGTH_SHORT
+                                                    ).show();
+                                                }
+                                        )
+                                        .show();
+                            }
+                    );
+                }
+        );
+
+        dialog.show();
+    }
+
+    private String nilai(String text) {
+
+        if (text == null
+                || text.trim().isEmpty()) {
+
+            return "-";
         }
+
+        return text;
     }
 
-    if (!Boolean.TRUE.equals(terkirim)
-            && waktuReminder != null
-            && waktuReminder <= System.currentTimeMillis()) {
+    // ============================================================
+    // HAPUS RIWAYAT
+    // ============================================================
 
-        detail.append(
-                "\n⚠️ REMINDER SUDAH LEWAT TEMPO"
-        );
+    private void konfirmasiHapusRiwayat() {
+
+        new AlertDialog.Builder(this)
+                .setTitle("🗑️ Hapus riwayat?")
+                .setMessage(
+                        "Yang dihapus hanya data yang sudah TERKIRIM.\n\n"
+                                + "Data BELUM TERKIRIM tidak akan dihapus."
+                )
+                .setNegativeButton(
+                        "BATAL",
+                        null
+                )
+                .setPositiveButton(
+                        "HAPUS",
+                        (dialog, which) -> {
+
+                            List<ReminderData> sent =
+                                    localDataStore.getSent();
+
+                            for (ReminderData data : sent) {
+                                batalkanReminder(data);
+                            }
+
+                            localDataStore.deleteAllSent();
+
+                            backupKeGoogleDriveOtomatis();
+
+                            Toast.makeText(
+                                    this,
+                                    "Riwayat terkirim dihapus.",
+                                    Toast.LENGTH_SHORT
+                            ).show();
+                        }
+                )
+                .show();
     }
 
-    detail.append("\n");
+    // ============================================================
+    // GOOGLE DRIVE
+    // ============================================================
 
-    detail.append(
-            "Status: "
-    ).append(status);
+    private void backupKeGoogleDrive() {
 
-    if (pesan != null &&
-            !pesan.trim().isEmpty()) {
+        if (localDataStore.size() == 0) {
 
-        detail.append(
-                "\n\nPesan WhatsApp:\n\n"
-        );
+            Toast.makeText(
+                    this,
+                    "Belum ada data untuk dibackup.",
+                    Toast.LENGTH_SHORT
+            ).show();
 
-        detail.append(pesan);
-    }
+            return;
+        }
 
-    new AlertDialog.Builder(this)
-            .setTitle(
-                    "DETAIL REMINDER"
-            )
-            .setMessage(
-                    detail.toString()
-            )
-            .setPositiveButton(
-                    "TUTUP",
-                    null
-            )
-            .show();
-}
-
-// =====================================================
-// LOGIN + NOTIFIKASI
-// =====================================================
-
-private void cekLoginFirebase() {
-
-    if (auth.getCurrentUser() == null) {
-
-        kembaliKeLogin();
-
-        return;
-    }
-
-    mintaIzinNotifikasi();
-}
-
-private void mintaIzinNotifikasi() {
-
-    if (Build.VERSION.SDK_INT >= 33) {
-
-        if (ContextCompat.checkSelfPermission(
+        Toast.makeText(
                 this,
-                Manifest.permission.POST_NOTIFICATIONS
-        ) != PackageManager.PERMISSION_GRANTED) {
+                "Menghubungkan ke Google Drive...",
+                Toast.LENGTH_SHORT
+        ).show();
 
-            izinNotifikasiLauncher.launch(
-                    Manifest.permission.POST_NOTIFICATIONS
-            );
+        googleDriveHelper.mintaIzinDrive(
+                this,
+                new GoogleDriveHelper.DriveCallback() {
+
+                    @Override
+                    public void onSuccess() {
+
+                        googleDriveHelper.uploadDatabase(
+                                localDataStore.toJson(),
+                                new GoogleDriveHelper.DriveCallback() {
+
+                                    @Override
+                                    public void onSuccess() {
+
+                                        Toast.makeText(
+                                                MainActivity.this,
+                                                "☁️ Backup Google Drive berhasil.",
+                                                Toast.LENGTH_LONG
+                                        ).show();
+                                    }
+
+                                    @Override
+                                    public void onError(
+                                            Exception e
+                                    ) {
+
+                                        Toast.makeText(
+                                                MainActivity.this,
+                                                "Backup gagal: "
+                                                        + e.getMessage(),
+                                                Toast.LENGTH_LONG
+                                        ).show();
+                                    }
+                                }
+                        );
+                    }
+
+                    @Override
+                    public void onError(
+                            Exception e
+                    ) {
+
+                        Toast.makeText(
+                                MainActivity.this,
+                                "Izin Google Drive gagal: "
+                                        + e.getMessage(),
+                                Toast.LENGTH_LONG
+                        ).show();
+                    }
+                }
+        );
+    }
+
+    private void backupKeGoogleDriveOtomatis() {
+
+        if (localDataStore.size() == 0) {
+            return;
+        }
+
+        googleDriveHelper.mintaIzinDrive(
+                this,
+                new GoogleDriveHelper.DriveCallback() {
+
+                    @Override
+                    public void onSuccess() {
+
+                        googleDriveHelper.uploadDatabase(
+                                localDataStore.toJson(),
+                                new GoogleDriveHelper.DriveCallback() {
+
+                                    @Override
+                                    public void onSuccess() {
+                                        // Berhasil.
+                                    }
+
+                                    @Override
+                                    public void onError(
+                                            Exception e
+                                    ) {
+                                        // Backup otomatis gagal.
+                                        // Data lokal tetap aman.
+                                    }
+                                }
+                        );
+                    }
+
+                    @Override
+                    public void onError(
+                            Exception e
+                    ) {
+                        // Data lokal tetap aman.
+                    }
+                }
+        );
+    }
+
+    private void restoreDariGoogleDriveOtomatis() {
+
+        googleDriveHelper.mintaIzinDrive(
+                this,
+                new GoogleDriveHelper.DriveCallback() {
+
+                    @Override
+                    public void onSuccess() {
+
+                        googleDriveHelper.downloadDatabase(
+                                new GoogleDriveHelper.DataCallback() {
+
+                                    @Override
+                                    public void onSuccess(
+                                            String json
+                                    ) {
+
+                                        if (json == null
+                                                || json.trim().isEmpty()) {
+
+                                            return;
+                                        }
+
+                                        localDataStore.restoreFromJson(
+                                                json
+                                        );
+
+                                        jadwalkanSemuaReminder();
+
+                                        runOnUiThread(() -> {
+
+                                            Toast.makeText(
+                                                    MainActivity.this,
+                                                    "♻️ Data Google Drive berhasil dipulihkan.",
+                                                    Toast.LENGTH_LONG
+                                            ).show();
+                                        });
+                                    }
+
+                                    @Override
+                                    public void onError(
+                                            Exception e
+                                    ) {
+                                        // Belum ada backup.
+                                    }
+                                }
+                        );
+                    }
+
+                    @Override
+                    public void onError(
+                            Exception e
+                    ) {
+                        // Belum mendapatkan izin Drive.
+                    }
+                }
+        );
+    }
+
+    private void konfirmasiRestore() {
+
+        new AlertDialog.Builder(this)
+                .setTitle("♻️ Restore Google Drive")
+                .setMessage(
+                        "Data lokal di HP akan diganti dengan data backup Google Drive.\n\n"
+                                + "Lanjutkan?"
+                )
+                .setNegativeButton(
+                        "BATAL",
+                        null
+                )
+                .setPositiveButton(
+                        "RESTORE",
+                        (dialog, which) ->
+                                restoreManual()
+                )
+                .show();
+    }
+
+    private void restoreManual() {
+
+        Toast.makeText(
+                this,
+                "Mengambil backup dari Google Drive...",
+                Toast.LENGTH_SHORT
+        ).show();
+
+        googleDriveHelper.mintaIzinDrive(
+                this,
+                new GoogleDriveHelper.DriveCallback() {
+
+                    @Override
+                    public void onSuccess() {
+
+                        googleDriveHelper.downloadDatabase(
+                                new GoogleDriveHelper.DataCallback() {
+
+                                    @Override
+                                    public void onSuccess(
+                                            String json
+                                    ) {
+
+                                        if (json == null
+                                                || json.trim().isEmpty()) {
+
+                                            runOnUiThread(() ->
+                                                    Toast.makeText(
+                                                            MainActivity.this,
+                                                            "Backup tidak ditemukan.",
+                                                            Toast.LENGTH_LONG
+                                                    ).show()
+                                            );
+
+                                            return;
+                                        }
+
+                                        localDataStore.restoreFromJson(
+                                                json
+                                        );
+
+                                        jadwalkanSemuaReminder();
+
+                                        runOnUiThread(() -> {
+
+                                            Toast.makeText(
+                                                    MainActivity.this,
+                                                    "♻️ Restore berhasil.",
+                                                    Toast.LENGTH_LONG
+                                            ).show();
+                                        });
+                                    }
+
+                                    @Override
+                                    public void onError(
+                                            Exception e
+                                    ) {
+
+                                        runOnUiThread(() ->
+                                                Toast.makeText(
+                                                        MainActivity.this,
+                                                        "Restore gagal: "
+                                                                + e.getMessage(),
+                                                        Toast.LENGTH_LONG
+                                                ).show()
+                                        );
+                                    }
+                                }
+                        );
+                    }
+
+                    @Override
+                    public void onError(
+                            Exception e
+                    ) {
+
+                        Toast.makeText(
+                                MainActivity.this,
+                                "Google Drive tidak bisa diakses.",
+                                Toast.LENGTH_LONG
+                        ).show();
+                    }
+                }
+        );
+    }
+
+    // ============================================================
+    // UTIL
+    // ============================================================
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+
+        if (googleDriveHelper != null) {
+            googleDriveHelper.shutdown();
         }
     }
-}
-
 }
