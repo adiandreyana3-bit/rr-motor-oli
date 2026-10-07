@@ -1,41 +1,41 @@
 package com.rrmotor.reminder;
 
+import android.app.Activity;
 import android.content.Intent;
 import android.os.Bundle;
-import android.text.InputType;
+import android.os.CancellationSignal;
 import android.view.Gravity;
-import android.view.View;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.credentials.Credential;
+import androidx.credentials.CredentialManager;
+import androidx.credentials.CredentialManagerCallback;
+import androidx.credentials.GetCredentialRequest;
+import androidx.credentials.GetCredentialResponse;
+import androidx.credentials.exceptions.GetCredentialException;
 
-import com.google.firebase.auth.FirebaseAuth;
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption;
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential;
+import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException;
+
+import java.util.concurrent.Executors;
 
 public class LoginActivity extends AppCompatActivity {
 
-    private FirebaseAuth auth;
+    private CredentialManager credentialManager;
 
-    private EditText emailInput;
-    private EditText passwordInput;
-
-    private Button loginButton;
-    private Button daftarButton;
+    private Button loginGoogleButton;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        auth = FirebaseAuth.getInstance();
-
-        // Kalau sudah login, langsung masuk ke aplikasi
-        if (auth.getCurrentUser() != null) {
-            bukaMainActivity();
-            return;
-        }
+        credentialManager = CredentialManager.create(this);
 
         buatTampilan();
     }
@@ -44,8 +44,8 @@ public class LoginActivity extends AppCompatActivity {
 
         LinearLayout utama = new LinearLayout(this);
         utama.setOrientation(LinearLayout.VERTICAL);
-        utama.setPadding(40, 50, 40, 40);
         utama.setGravity(Gravity.CENTER_HORIZONTAL);
+        utama.setPadding(40, 60, 40, 40);
 
         TextView judul = new TextView(this);
         judul.setText("🏍️ RR MOTOR");
@@ -57,41 +57,23 @@ public class LoginActivity extends AppCompatActivity {
         subjudul.setText("RR MOTOR REMINDER");
         subjudul.setTextSize(18);
         subjudul.setGravity(Gravity.CENTER);
-        subjudul.setPadding(0, 0, 0, 40);
+        subjudul.setPadding(0, 0, 0, 15);
 
-        emailInput = new EditText(this);
-        emailInput.setHint("Email");
-        emailInput.setSingleLine(true);
-        emailInput.setInputType(
-                InputType.TYPE_CLASS_TEXT |
-                InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+        TextView keterangan = new TextView(this);
+        keterangan.setText(
+                "Login menggunakan akun Google.\n\n" +
+                "Data reminder akan disimpan dan dicadangkan " +
+                "ke Google Drive."
         );
+        keterangan.setTextSize(15);
+        keterangan.setGravity(Gravity.CENTER);
+        keterangan.setPadding(10, 10, 10, 30);
 
-        LinearLayout.LayoutParams inputParams =
-                new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT
-                );
+        loginGoogleButton = new Button(this);
+        loginGoogleButton.setText("🔵 LOGIN DENGAN GOOGLE");
+        loginGoogleButton.setTextSize(16);
 
-        inputParams.setMargins(0, 10, 0, 10);
-
-        utama.addView(judul);
-        utama.addView(subjudul);
-        utama.addView(emailInput, inputParams);
-
-        passwordInput = new EditText(this);
-        passwordInput.setHint("Password");
-        passwordInput.setSingleLine(true);
-        passwordInput.setInputType(
-                InputType.TYPE_CLASS_TEXT |
-                InputType.TYPE_TEXT_VARIATION_PASSWORD
-        );
-
-        utama.addView(passwordInput, inputParams);
-
-        loginButton = new Button(this);
-        loginButton.setText("LOGIN");
-        loginButton.setOnClickListener(v -> login());
+        loginGoogleButton.setOnClickListener(v -> loginDenganGoogle());
 
         LinearLayout.LayoutParams buttonParams =
                 new LinearLayout.LayoutParams(
@@ -99,136 +81,181 @@ public class LoginActivity extends AppCompatActivity {
                         LinearLayout.LayoutParams.WRAP_CONTENT
                 );
 
-        buttonParams.setMargins(0, 25, 0, 10);
+        buttonParams.setMargins(0, 20, 0, 10);
 
-        utama.addView(loginButton, buttonParams);
-
-        daftarButton = new Button(this);
-        daftarButton.setText("DAFTAR AKUN BARU");
-        daftarButton.setOnClickListener(v -> daftarAkun());
-
-        utama.addView(daftarButton, buttonParams);
+        utama.addView(judul);
+        utama.addView(subjudul);
+        utama.addView(keterangan);
+        utama.addView(loginGoogleButton, buttonParams);
 
         setContentView(utama);
     }
 
-    private void login() {
+    private void loginDenganGoogle() {
 
-        String email = emailInput.getText().toString().trim();
-        String password = passwordInput.getText().toString();
+        loginGoogleButton.setEnabled(false);
 
-        if (email.isEmpty()) {
-            emailInput.setError("Email wajib diisi");
-            emailInput.requestFocus();
-            return;
-        }
+        String serverClientId = getString(
+                R.string.default_web_client_id
+        );
 
-        if (password.isEmpty()) {
-            passwordInput.setError("Password wajib diisi");
-            passwordInput.requestFocus();
-            return;
-        }
+        GetGoogleIdOption googleIdOption =
+                new GetGoogleIdOption.Builder()
+                        .setServerClientId(serverClientId)
+                        .setFilterByAuthorizedAccounts(false)
+                        .setAutoSelectEnabled(false)
+                        .build();
 
-        loginButton.setEnabled(false);
-        daftarButton.setEnabled(false);
+        GetCredentialRequest request =
+                new GetCredentialRequest.Builder()
+                        .addCredentialOption(googleIdOption)
+                        .build();
 
-        auth.signInWithEmailAndPassword(email, password)
-                .addOnCompleteListener(this, task -> {
+        CancellationSignal cancellationSignal =
+                new CancellationSignal();
 
-                    loginButton.setEnabled(true);
-                    daftarButton.setEnabled(true);
+        credentialManager.getCredentialAsync(
+                this,
+                request,
+                cancellationSignal,
+                Executors.newSingleThreadExecutor(),
+                new CredentialManagerCallback<
+                        GetCredentialResponse,
+                        GetCredentialException>() {
 
-                    if (task.isSuccessful()) {
+                    @Override
+                    public void onResult(
+                            GetCredentialResponse result) {
 
-                        Toast.makeText(
-                                this,
-                                "Login berhasil",
-                                Toast.LENGTH_SHORT
-                        ).show();
+                        runOnUiThread(() -> {
 
-                        bukaMainActivity();
+                            try {
 
-                    } else {
+                                Credential credential =
+                                        result.getCredential();
 
-                        String pesan = "Login gagal";
+                                if (credential == null) {
+                                    loginGagal(
+                                            "Data login Google tidak ditemukan."
+                                    );
+                                    return;
+                                }
 
-                        if (task.getException() != null) {
-                            pesan = task.getException().getMessage();
-                        }
+                                if (credential.getData() == null) {
+                                    loginGagal(
+                                            "Data akun Google tidak tersedia."
+                                    );
+                                    return;
+                                }
 
-                        Toast.makeText(
-                                this,
-                                pesan,
-                                Toast.LENGTH_LONG
-                        ).show();
+                                GoogleIdTokenCredential googleCredential =
+                                        GoogleIdTokenCredential
+                                                .createFrom(
+                                                        credential.getData()
+                                                );
+
+                                String nama =
+                                        googleCredential.getDisplayName();
+
+                                String email =
+                                        googleCredential.getId();
+
+                                if (nama == null ||
+                                        nama.trim().isEmpty()) {
+                                    nama = "Pengguna Google";
+                                }
+
+                                if (email == null ||
+                                        email.trim().isEmpty()) {
+                                    email = "";
+                                }
+
+                                simpanLoginGoogle(
+                                        nama,
+                                        email
+                                );
+
+                            } catch (
+                                    GoogleIdTokenParsingException e) {
+
+                                loginGagal(
+                                        "Data akun Google tidak dapat dibaca."
+                                );
+                            } catch (Exception e) {
+
+                                loginGagal(
+                                        "Login Google gagal: "
+                                                + e.getMessage()
+                                );
+                            }
+                        });
                     }
-                });
+
+                    @Override
+                    public void onError(
+                            @NonNull GetCredentialException e) {
+
+                        runOnUiThread(() -> {
+
+                            loginGoogleButton.setEnabled(true);
+
+                            Toast.makeText(
+                                    LoginActivity.this,
+                                    "Login Google dibatalkan atau gagal.",
+                                    Toast.LENGTH_LONG
+                            ).show();
+                        });
+                    }
+                }
+        );
     }
 
-    private void daftarAkun() {
+    private void simpanLoginGoogle(
+            String nama,
+            String email) {
 
-        String email = emailInput.getText().toString().trim();
-        String password = passwordInput.getText().toString();
+        getSharedPreferences(
+                "RR_MOTOR_LOGIN",
+                MODE_PRIVATE
+        )
+                .edit()
+                .putBoolean("sudah_login", true)
+                .putString("nama_google", nama)
+                .putString("email_google", email)
+                .apply();
 
-        if (email.isEmpty()) {
-            emailInput.setError("Masukkan email");
-            emailInput.requestFocus();
-            return;
-        }
+        Toast.makeText(
+                this,
+                "Login Google berhasil.",
+                Toast.LENGTH_SHORT
+        ).show();
 
-        if (password.isEmpty()) {
-            passwordInput.setError("Masukkan password");
-            passwordInput.requestFocus();
-            return;
-        }
+        bukaMainActivity();
+    }
 
-        if (password.length() < 6) {
-            passwordInput.setError("Password minimal 6 karakter");
-            passwordInput.requestFocus();
-            return;
-        }
+    private void loginGagal(String pesan) {
 
-        loginButton.setEnabled(false);
-        daftarButton.setEnabled(false);
+        loginGoogleButton.setEnabled(true);
 
-        auth.createUserWithEmailAndPassword(email, password)
-                .addOnCompleteListener(this, task -> {
-
-                    loginButton.setEnabled(true);
-                    daftarButton.setEnabled(true);
-
-                    if (task.isSuccessful()) {
-
-                        Toast.makeText(
-                                this,
-                                "Akun berhasil dibuat",
-                                Toast.LENGTH_LONG
-                        ).show();
-
-                        bukaMainActivity();
-
-                    } else {
-
-                        String pesan = "Pendaftaran gagal";
-
-                        if (task.getException() != null) {
-                            pesan = task.getException().getMessage();
-                        }
-
-                        Toast.makeText(
-                                this,
-                                pesan,
-                                Toast.LENGTH_LONG
-                        ).show();
-                    }
-                });
+        Toast.makeText(
+                this,
+                pesan,
+                Toast.LENGTH_LONG
+        ).show();
     }
 
     private void bukaMainActivity() {
 
-        Intent intent = new Intent(
-                LoginActivity.this,
-                MainActivity.class
+        Intent intent =
+                new Intent(
+                        LoginActivity.this,
+                        MainActivity.class
+                );
+
+        intent.addFlags(
+                Intent.FLAG_ACTIVITY_CLEAR_TOP |
+                Intent.FLAG_ACTIVITY_NEW_TASK |
+                Intent.FLAG_ACTIVITY_CLEAR_TASK
         );
 
         startActivity(intent);
