@@ -1,5 +1,7 @@
 package com.rrmotor.reminder;
 
+import com.google.firebase.auth.FirebaseAuth;
+
 import android.Manifest;
 import android.app.AlarmManager;
 import android.app.DatePickerDialog;
@@ -19,7 +21,6 @@ import android.view.View;
 import android.widget.*;
 
 import androidx.activity.result.ActivityResultLauncher;
-import androidx.activity.result.IntentSenderRequest;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
@@ -43,7 +44,7 @@ public class MainActivity extends AppCompatActivity {
     private static final int REQ_CONTACT = 1001;
 
     private LocalDataStore localDataStore;
-    private GoogleDriveHelper googleDriveHelper;
+    private FirebaseBackupHelper firebaseBackupHelper;
 
     private EditText etNama;
     private EditText etNopol;
@@ -65,42 +66,6 @@ public class MainActivity extends AppCompatActivity {
 
     private final SimpleDateFormat tanggalFormat =
             new SimpleDateFormat("dd-MM-yyyy", Locale.getDefault());
-
-    // ============================================================
-    // GOOGLE DRIVE AUTHORIZATION
-    // ============================================================
-
-    private final ActivityResultLauncher<IntentSenderRequest>
-            driveAuthorizationLauncher =
-            registerForActivityResult(
-                    new ActivityResultContracts.StartIntentSenderForResult(),
-                    result -> {
-
-                        if (result.getResultCode() == RESULT_OK
-                                && result.getData() != null) {
-
-                            googleDriveHelper
-                                    .prosesHasilAuthorization(
-                                            this,
-                                            result.getData()
-                                    );
-
-                        } else {
-
-                            Toast.makeText(
-                                    this,
-                                    "Izin Google Drive dibatalkan.",
-                                    Toast.LENGTH_SHORT
-                            ).show();
-                        }
-                    }
-            );
-
-    public void launchDriveAuthorization(
-            IntentSenderRequest request
-    ) {
-        driveAuthorizationLauncher.launch(request);
-    }
 
     // ============================================================
     // NOTIFICATION PERMISSION
@@ -155,8 +120,8 @@ public class MainActivity extends AppCompatActivity {
         localDataStore =
                 new LocalDataStore(this);
 
-        googleDriveHelper =
-                new GoogleDriveHelper(this);
+        firebaseBackupHelper =
+                new FirebaseBackupHelper(this);
 
         if (!isLoggedIn()) {
 
@@ -172,20 +137,12 @@ public class MainActivity extends AppCompatActivity {
 
         cekIzinAlarm();
 
-        /*
-         * Kalau data lokal kosong:
-         * coba restore dari Google Drive.
-         *
-         * Kalau data lokal sudah ada:
-         * langsung jadwalkan ulang reminder.
-         */
+        // Pulihkan data dari Firebase jika data lokal masih kosong.
         if (localDataStore.size() == 0) {
-
-            restoreDariGoogleDriveOtomatis();
-
+            restoreDariFirebaseOtomatis();
         } else {
-
             jadwalkanSemuaReminder();
+            backupKeFirebaseOtomatis();
         }
     }
 
@@ -204,7 +161,7 @@ public class MainActivity extends AppCompatActivity {
         return pref.getBoolean(
                 KEY_LOGGED_IN,
                 false
-        );
+        ) && FirebaseAuth.getInstance().getCurrentUser() != null;
     }
 
     private void bukaLogin() {
@@ -574,12 +531,12 @@ public class MainActivity extends AppCompatActivity {
 
         btnBackup =
                 buatButton(
-                        "☁️ BACKUP KE GOOGLE DRIVE",
+                        "☁️ BACKUP KE FIREBASE",
                         0xFF087F23
                 );
 
         btnBackup.setOnClickListener(
-                v -> backupKeGoogleDrive()
+                v -> backupKeFirebase()
         );
 
         isi.addView(
@@ -592,7 +549,7 @@ public class MainActivity extends AppCompatActivity {
 
         btnRestore =
                 buatButton(
-                        "♻️ RESTORE DARI GOOGLE DRIVE",
+                        "♻️ RESTORE DARI FIREBASE",
                         0xFF087F23
                 );
 
@@ -1202,7 +1159,7 @@ public class MainActivity extends AppCompatActivity {
                 Toast.LENGTH_LONG
         ).show();
 
-        backupKeGoogleDriveOtomatis();
+        backupKeFirebaseOtomatis();
     }
 
     // ============================================================
@@ -2097,7 +2054,7 @@ public class MainActivity extends AppCompatActivity {
 
                                                     dialog.dismiss();
 
-                                                    backupKeGoogleDriveOtomatis();
+                                                    backupKeFirebaseOtomatis();
 
                                                     Toast.makeText(
                                                             this,
@@ -2167,7 +2124,7 @@ public class MainActivity extends AppCompatActivity {
                             localDataStore
                                     .deleteAllSent();
 
-                            backupKeGoogleDriveOtomatis();
+                            backupKeFirebaseOtomatis();
 
                             Toast.makeText(
                                     this,
@@ -2180,312 +2137,84 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // ============================================================
-    // BACKUP GOOGLE DRIVE
+    // BACKUP DAN RESTORE FIREBASE
     // ============================================================
 
-    private void backupKeGoogleDrive() {
-
+    private void backupKeFirebase() {
         if (localDataStore.size() == 0) {
-
-            Toast.makeText(
-                    this,
-                    "Belum ada data untuk dibackup.",
-                    Toast.LENGTH_SHORT
-            ).show();
-
+            Toast.makeText(this, "Belum ada data untuk dibackup.", Toast.LENGTH_SHORT).show();
             return;
         }
-
-        Toast.makeText(
-                this,
-                "Menghubungkan ke Google Drive...",
-                Toast.LENGTH_SHORT
-        ).show();
-
-        googleDriveHelper
-                .mintaIzinDrive(
-                        this,
-                        new GoogleDriveHelper.DriveCallback() {
-
-                            @Override
-                            public void onSuccess() {
-
-                                googleDriveHelper
-                                        .uploadDatabase(
-                                                localDataStore.toJson(),
-                                                new GoogleDriveHelper.DriveCallback() {
-
-                                                    @Override
-                                                    public void onSuccess() {
-
-                                                        Toast.makeText(
-                                                                MainActivity.this,
-                                                                "☁️ Backup Google Drive berhasil.",
-                                                                Toast.LENGTH_LONG
-                                                        ).show();
-                                                    }
-
-                                                    @Override
-                                                    public void onError(
-                                                            Exception e
-                                                    ) {
-
-                                                        Toast.makeText(
-                                                                MainActivity.this,
-                                                                "Backup gagal: "
-                                                                        + e.getMessage(),
-                                                                Toast.LENGTH_LONG
-                                                        ).show();
-                                                    }
-                                                }
-                                        );
-                            }
-
-                            @Override
-                            public void onError(
-                                    Exception e
-                            ) {
-
-                                Toast.makeText(
-                                        MainActivity.this,
-                                        "Izin Google Drive gagal: "
-                                                + e.getMessage(),
-                                        Toast.LENGTH_LONG
-                                ).show();
-                            }
-                        }
-                );
+        Toast.makeText(this, "Menyimpan data ke Firebase...", Toast.LENGTH_SHORT).show();
+        firebaseBackupHelper.backup(localDataStore.toJson(), new FirebaseBackupHelper.Callback() {
+            @Override public void onSuccess() {
+                runOnUiThread(() -> Toast.makeText(MainActivity.this,
+                        "☁️ Backup Firebase berhasil.", Toast.LENGTH_LONG).show());
+            }
+            @Override public void onError(Exception e) {
+                runOnUiThread(() -> Toast.makeText(MainActivity.this,
+                        "Backup Firebase gagal: " + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        });
     }
 
-    // ============================================================
-    // BACKUP OTOMATIS
-    // ============================================================
-
-    private void backupKeGoogleDriveOtomatis() {
-
-        if (localDataStore.size() == 0) {
-
-            return;
-        }
-
-        googleDriveHelper
-                .mintaIzinDrive(
-                        this,
-                        new GoogleDriveHelper.DriveCallback() {
-
-                            @Override
-                            public void onSuccess() {
-
-                                googleDriveHelper
-                                        .uploadDatabase(
-                                                localDataStore.toJson(),
-                                                new GoogleDriveHelper.DriveCallback() {
-
-                                                    @Override
-                                                    public void onSuccess() {
-                                                    }
-
-                                                    @Override
-                                                    public void onError(
-                                                            Exception e
-                                                    ) {
-                                                    }
-                                                }
-                                        );
-                            }
-
-                            @Override
-                            public void onError(
-                                    Exception e
-                            ) {
-                            }
-                        }
-                );
+    private void backupKeFirebaseOtomatis() {
+        if (localDataStore == null || localDataStore.size() == 0 || firebaseBackupHelper == null) return;
+        firebaseBackupHelper.backup(localDataStore.toJson(), new FirebaseBackupHelper.Callback() {
+            @Override public void onSuccess() { }
+            @Override public void onError(Exception e) { android.util.Log.e("RR_MOTOR_FIREBASE", "Backup otomatis gagal", e); }
+        });
     }
 
-    // ============================================================
-    // RESTORE OTOMATIS
-    // ============================================================
-
-    private void restoreDariGoogleDriveOtomatis() {
-
-        googleDriveHelper
-                .mintaIzinDrive(
-                        this,
-                        new GoogleDriveHelper.DriveCallback() {
-
-                            @Override
-                            public void onSuccess() {
-
-                                googleDriveHelper
-                                        .downloadDatabase(
-                                                new GoogleDriveHelper.DataCallback() {
-
-                                                    @Override
-                                                    public void onSuccess(
-                                                            String json
-                                                    ) {
-
-                                                        if (json == null
-                                                                || json.trim().isEmpty()) {
-
-                                                            return;
-                                                        }
-
-                                                        localDataStore
-                                                                .restoreFromJson(
-                                                                        json
-                                                                );
-
-                                                        jadwalkanSemuaReminder();
-
-                                                        runOnUiThread(
-                                                                () ->
-                                                                        Toast.makeText(
-                                                                                MainActivity.this,
-                                                                                "♻️ Data Google Drive berhasil dipulihkan.",
-                                                                                Toast.LENGTH_LONG
-                                                                        ).show()
-                                                        );
-                                                    }
-
-                                                    @Override
-                                                    public void onError(
-                                                            Exception e
-                                                    ) {
-                                                    }
-                                                }
-                                        );
-                            }
-
-                            @Override
-                            public void onError(
-                                    Exception e
-                            ) {
-                            }
-                        }
-                );
+    private void restoreDariFirebaseOtomatis() {
+        if (firebaseBackupHelper == null) return;
+        firebaseBackupHelper.restore(new FirebaseBackupHelper.DataCallback() {
+            @Override public void onSuccess(String json) {
+                if (json == null || json.trim().isEmpty()) return;
+                boolean restored = localDataStore.restoreFromJson(json);
+                if (restored) runOnUiThread(() -> {
+                    jadwalkanSemuaReminder();
+                    Toast.makeText(MainActivity.this, "♻️ Data Firebase berhasil dipulihkan.", Toast.LENGTH_LONG).show();
+                });
+            }
+            @Override public void onError(Exception e) {
+                android.util.Log.e("RR_MOTOR_FIREBASE", "Restore otomatis gagal", e);
+            }
+        });
     }
-
-    // ============================================================
-    // KONFIRMASI RESTORE
-    // ============================================================
 
     private void konfirmasiRestore() {
-
         new AlertDialog.Builder(this)
-                .setTitle(
-                        "♻️ Restore Google Drive"
-                )
-                .setMessage(
-                        "Data lokal di HP akan diganti dengan data backup Google Drive.\n\n"
-                                + "Lanjutkan?"
-                )
-                .setNegativeButton(
-                        "BATAL",
-                        null
-                )
-                .setPositiveButton(
-                        "RESTORE",
-                        (dialog, which) ->
-                                restoreManual()
-                )
+                .setTitle("♻️ Restore dari Firebase")
+                .setMessage("Data lokal di HP akan diganti dengan data backup Firebase.\n\nLanjutkan?")
+                .setNegativeButton("BATAL", null)
+                .setPositiveButton("RESTORE", (dialog, which) -> restoreManual())
                 .show();
     }
 
-    // ============================================================
-    // RESTORE MANUAL
-    // ============================================================
-
     private void restoreManual() {
-
-        Toast.makeText(
-                this,
-                "Mengambil backup dari Google Drive...",
-                Toast.LENGTH_SHORT
-        ).show();
-
-        googleDriveHelper
-                .mintaIzinDrive(
-                        this,
-                        new GoogleDriveHelper.DriveCallback() {
-
-                            @Override
-                            public void onSuccess() {
-
-                                googleDriveHelper
-                                        .downloadDatabase(
-                                                new GoogleDriveHelper.DataCallback() {
-
-                                                    @Override
-                                                    public void onSuccess(
-                                                            String json
-                                                    ) {
-
-                                                        if (json == null
-                                                                || json.trim().isEmpty()) {
-
-                                                            runOnUiThread(
-                                                                    () ->
-                                                                            Toast.makeText(
-                                                                                    MainActivity.this,
-                                                                                    "Backup tidak ditemukan.",
-                                                                                    Toast.LENGTH_LONG
-                                                                            ).show()
-                                                            );
-
-                                                            return;
-                                                        }
-
-                                                        localDataStore
-                                                                .restoreFromJson(
-                                                                        json
-                                                                );
-
-                                                        jadwalkanSemuaReminder();
-
-                                                        runOnUiThread(
-                                                                () ->
-                                                                        Toast.makeText(
-                                                                                MainActivity.this,
-                                                                                "♻️ Restore berhasil.",
-                                                                                Toast.LENGTH_LONG
-                                                                        ).show()
-                                                        );
-                                                    }
-
-                                                    @Override
-                                                    public void onError(
-                                                            Exception e
-                                                    ) {
-
-                                                        runOnUiThread(
-                                                                () ->
-                                                                        Toast.makeText(
-                                                                                MainActivity.this,
-                                                                                "Restore gagal: "
-                                                                                        + e.getMessage(),
-                                                                                Toast.LENGTH_LONG
-                                                                        ).show()
-                                                        );
-                                                    }
-                                                }
-                                        );
-                            }
-
-                            @Override
-                            public void onError(
-                                    Exception e
-                            ) {
-
-                                Toast.makeText(
-                                        MainActivity.this,
-                                        "Google Drive tidak bisa diakses.",
-                                        Toast.LENGTH_LONG
-                                ).show();
-                            }
-                        }
-                );
+        Toast.makeText(this, "Mengambil backup dari Firebase...", Toast.LENGTH_SHORT).show();
+        firebaseBackupHelper.restore(new FirebaseBackupHelper.DataCallback() {
+            @Override public void onSuccess(String json) {
+                runOnUiThread(() -> {
+                    if (json == null || json.trim().isEmpty()) {
+                        Toast.makeText(MainActivity.this, "Backup Firebase tidak ditemukan.", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    boolean restored = localDataStore.restoreFromJson(json);
+                    if (restored) {
+                        jadwalkanSemuaReminder();
+                        Toast.makeText(MainActivity.this, "♻️ Restore Firebase berhasil.", Toast.LENGTH_LONG).show();
+                    } else {
+                        Toast.makeText(MainActivity.this, "Data backup tidak valid.", Toast.LENGTH_LONG).show();
+                    }
+                });
+            }
+            @Override public void onError(Exception e) {
+                runOnUiThread(() -> Toast.makeText(MainActivity.this,
+                        "Restore Firebase gagal: " + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        });
     }
 
     // ============================================================
@@ -2497,9 +2226,6 @@ public class MainActivity extends AppCompatActivity {
 
         super.onDestroy();
 
-        if (googleDriveHelper != null) {
 
-            googleDriveHelper.shutdown();
-        }
     }
 }
