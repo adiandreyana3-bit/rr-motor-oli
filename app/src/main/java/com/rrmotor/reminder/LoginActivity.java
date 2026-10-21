@@ -17,6 +17,9 @@ import androidx.credentials.exceptions.GetCredentialException;
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption;
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential;
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException;
+import com.google.firebase.auth.AuthCredential;
+import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.auth.GoogleAuthProvider;
 
 import java.security.SecureRandom;
 
@@ -330,50 +333,31 @@ public class LoginActivity extends AppCompatActivity {
             String email =
                     googleCredential.getId();
 
-            /*
-             * Simpan status login lokal.
-             *
-             * Kita TIDAK menggunakan Firebase Auth.
-             */
-            getSharedPreferences(
-                    "RR_MOTOR_LOGIN",
-                    MODE_PRIVATE
-            )
-                    .edit()
-                    .putBoolean(
-                            "sudah_login",
-                            true
-                    )
-                    .putString(
-                            "nama",
-                            nama == null
-                                    ? ""
-                                    : nama
-                    )
-                    .putString(
-                            "email",
-                            email == null
-                                    ? ""
-                                    : email
-                    )
-                    .apply();
+            String idToken = googleCredential.getIdToken();
+            if (idToken == null || idToken.trim().isEmpty()) {
+                throw new IllegalStateException("Token Google kosong. Periksa Web Client ID Firebase.");
+            }
 
-            runOnUiThread(
-                    () -> {
-
-                        tvStatus.setText(
-                                "Login berhasil."
-                        );
-
-                        Toast.makeText(
-                                LoginActivity.this,
-                                "Login Google berhasil.",
-                                Toast.LENGTH_SHORT
-                        ).show();
-
-                        bukaMainActivity();
-                    }
-            );
+            AuthCredential firebaseCredential = GoogleAuthProvider.getCredential(idToken, null);
+            FirebaseAuth.getInstance().signInWithCredential(firebaseCredential)
+                    .addOnSuccessListener(authResult -> {
+                        getSharedPreferences("RR_MOTOR_LOGIN", MODE_PRIVATE)
+                                .edit()
+                                .putBoolean("sudah_login", true)
+                                .putBoolean("logged_in", true)
+                                .putString("nama", nama == null ? "" : nama)
+                                .putString("email", email == null ? "" : email)
+                                .apply();
+                        runOnUiThread(() -> {
+                            tvStatus.setText("Login Firebase berhasil.");
+                            Toast.makeText(LoginActivity.this, "Login berhasil.", Toast.LENGTH_SHORT).show();
+                            bukaMainActivity();
+                        });
+                    })
+                    .addOnFailureListener(e -> runOnUiThread(() -> {
+                        tvStatus.setText("Login Firebase gagal.");
+                        Toast.makeText(LoginActivity.this, "Login Firebase gagal: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                    }));
 
         } catch (
                 GoogleIdTokenParsingException e
@@ -409,11 +393,8 @@ public class LoginActivity extends AppCompatActivity {
         return getSharedPreferences(
                 "RR_MOTOR_LOGIN",
                 MODE_PRIVATE
-        )
-                .getBoolean(
-                        "sudah_login",
-                        false
-                );
+        ).getBoolean("sudah_login", false)
+                && FirebaseAuth.getInstance().getCurrentUser() != null;
     }
 
     // ============================================================
