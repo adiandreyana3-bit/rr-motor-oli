@@ -336,7 +336,7 @@ public class LocalDataStore {
 
     /**
      * Mengganti seluruh database lokal
-     * dengan data hasil restore Google Drive.
+     * dengan data hasil restore Firebase.
      */
     public synchronized boolean replaceAll(
             List<ReminderData> reminders) {
@@ -349,7 +349,7 @@ public class LocalDataStore {
     }
 
     /**
-     * Menghasilkan JSON untuk backup Drive.
+     * Menghasilkan JSON untuk backup Firebase.
      */
     public synchronized String toJson() {
 
